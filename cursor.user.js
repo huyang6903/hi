@@ -1,237 +1,127 @@
 // ==UserScript==
-// @name         Watermelon Triangle Cursor Fixed
+// @name         Watermelon Cursor Basic Stable
 // @namespace    https://example.com/
-// @version      1.1.0
-// @description  Stable triangle watermelon cursor that follows the real mouse
+// @version      1.0.0
+// @description  Stable triangle watermelon cursor for all pages
 // @match        http://*/*
 // @match        https://*/*
 // @grant        none
+// @run-at       document-idle
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  let root = null;
-  let shape = null;
-  let initialized = false;
-  let mouseX = 0;
-  let mouseY = 0;
+  let cursorEl = null;
+  let started = false;
+
+  function createCursorSvg() {
+    return `
+      <svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg">
+        <g transform="rotate(-45 8 8)">
+          <path d="M2 2 L2 24 L18 8 Z" fill="#2e7d32"></path>
+          <path d="M3.5 4 L3.5 22 L16 8 Z" fill="#66bb6a"></path>
+          <path d="M5 6 L5 20 L14 8 Z" fill="#fffaf0"></path>
+          <path d="M6 7.5 L6 18.5 L12.5 8 Z" fill="#ff4d6d"></path>
+
+          <ellipse cx="8.8" cy="9.6" rx="1.1" ry="1.8" fill="#1a1a1a"></ellipse>
+          <ellipse cx="9.5" cy="13.2" rx="1.1" ry="1.8" fill="#1a1a1a"></ellipse>
+          <ellipse cx="7.7" cy="15.8" rx="1.1" ry="1.8" fill="#1a1a1a"></ellipse>
+        </g>
+      </svg>
+    `;
+  }
 
   function injectStyle() {
-    if (document.getElementById('wm-cursor-fixed-style')) return;
+    if (document.getElementById('wm-basic-style')) return;
 
     const style = document.createElement('style');
-    style.id = 'wm-cursor-fixed-style';
+    style.id = 'wm-basic-style';
     style.textContent = `
       * {
         cursor: none !important;
       }
 
-      #wm-cursor-fixed {
+      #wm-basic-cursor {
         position: fixed;
         left: 0;
         top: 0;
-        width: 32px;
-        height: 32px;
-        pointer-events: none;
-        z-index: 2147483647;
+        width: 28px;
+        height: 28px;
+        pointer-events: none !important;
+        z-index: 2147483647 !important;
         opacity: 1;
         will-change: transform;
+        contain: layout style paint;
       }
 
-      #wm-cursor-fixed .wm-shape {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 32px;
-        height: 32px;
-        transform-origin: 6px 6px;
-        transition: transform 0.08s ease, opacity 0.12s ease;
-      }
-
-      #wm-cursor-fixed.pressed .wm-shape {
-        transform: scale(0.82);
-      }
-
-      /* 外层深绿 */
-      #wm-cursor-fixed .rind-outer {
-        position: absolute;
-        left: 2px;
-        top: 2px;
-        width: 0;
-        height: 0;
-        border-right: 14px solid transparent;
-        border-top: 28px solid #2e7d32;
-        transform: rotate(-45deg);
-        transform-origin: 0 0;
-        filter: drop-shadow(0 2px 2px rgba(0,0,0,0.25));
-      }
-
-      /* 浅绿层 */
-      #wm-cursor-fixed .rind-inner {
-        position: absolute;
-        left: 3px;
-        top: 4px;
-        width: 0;
-        height: 0;
-        border-right: 12px solid transparent;
-        border-top: 24px solid #66bb6a;
-        transform: rotate(-45deg);
-        transform-origin: 0 0;
-      }
-
-      /* 白边 */
-      #wm-cursor-fixed .white {
-        position: absolute;
-        left: 4px;
-        top: 6px;
-        width: 0;
-        height: 0;
-        border-right: 10px solid transparent;
-        border-top: 20px solid #fffaf0;
-        transform: rotate(-45deg);
-        transform-origin: 0 0;
-      }
-
-      /* 红瓤 */
-      #wm-cursor-fixed .flesh {
-        position: absolute;
-        left: 5px;
-        top: 8px;
-        width: 0;
-        height: 0;
-        border-right: 8px solid transparent;
-        border-top: 16px solid #ff4d6d;
-        transform: rotate(-45deg);
-        transform-origin: 0 0;
-      }
-
-      /* 籽 */
-      #wm-cursor-fixed .seed {
-        position: absolute;
-        width: 3px;
-        height: 5px;
-        background: #1a1a1a;
-        border-radius: 50%;
-        transform: rotate(-20deg);
-      }
-
-      #wm-cursor-fixed .s1 { left: 10px; top: 10px; }
-      #wm-cursor-fixed .s2 { left: 12px; top: 14px; }
-      #wm-cursor-fixed .s3 { left: 8px; top: 15px; }
-
-      .wm-click-ripple {
-        position: fixed;
-        width: 16px;
-        height: 16px;
-        margin-left: -8px;
-        margin-top: -8px;
-        border: 2px solid rgba(255, 77, 109, 0.75);
-        border-radius: 50%;
-        pointer-events: none;
-        z-index: 2147483646;
-        animation: wm-ripple-fixed 0.35s ease-out forwards;
-      }
-
-      @keyframes wm-ripple-fixed {
-        0% {
-          transform: scale(0.4);
-          opacity: 0.95;
-        }
-        100% {
-          transform: scale(2.2);
-          opacity: 0;
-        }
+      #wm-basic-cursor svg {
+        display: block;
+        width: 28px;
+        height: 28px;
+        filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
       }
     `;
     document.head.appendChild(style);
   }
 
-  function createCursor() {
-    if (document.getElementById('wm-cursor-fixed')) {
-      root = document.getElementById('wm-cursor-fixed');
-      shape = root.querySelector('.wm-shape');
-      return;
-    }
+  function ensureCursor() {
+    if (cursorEl && document.body.contains(cursorEl)) return cursorEl;
 
-    root = document.createElement('div');
-    root.id = 'wm-cursor-fixed';
-    root.innerHTML = `
-      <div class="wm-shape">
-        <div class="rind-outer"></div>
-        <div class="rind-inner"></div>
-        <div class="white"></div>
-        <div class="flesh"></div>
-        <div class="seed s1"></div>
-        <div class="seed s2"></div>
-        <div class="seed s3"></div>
-      </div>
-    `;
-    document.body.appendChild(root);
+    cursorEl = document.getElementById('wm-basic-cursor');
+    if (cursorEl && document.body.contains(cursorEl)) return cursorEl;
+
+    cursorEl = document.createElement('div');
+    cursorEl.id = 'wm-basic-cursor';
+    cursorEl.innerHTML = createCursorSvg();
+    document.body.appendChild(cursorEl);
+
+    return cursorEl;
   }
 
-  function updateCursorPosition() {
-    if (!root) return;
+  function moveCursor(x, y) {
+    const el = ensureCursor();
 
-    // 让图标尖端更接近真实点击点
-    const offsetX = -3;
-    const offsetY = -3;
-    root.style.transform = `translate3d(${mouseX + offsetX}px, ${mouseY + offsetY}px, 0)`;
-  }
+    // 让西瓜尖端更接近真实点击点
+    const offsetX = -2;
+    const offsetY = -2;
 
-  function createRipple(x, y) {
-    const ripple = document.createElement('div');
-    ripple.className = 'wm-click-ripple';
-    ripple.style.left = x + 'px';
-    ripple.style.top = y + 'px';
-    document.body.appendChild(ripple);
-
-    setTimeout(() => {
-      ripple.remove();
-    }, 400);
+    el.style.transform = `translate3d(${x + offsetX}px, ${y + offsetY}px, 0)`;
   }
 
   function bindEvents() {
     window.addEventListener('mousemove', (e) => {
-      mouseX = e.clientX;
-      mouseY = e.clientY;
-      updateCursorPosition();
-      if (root) root.style.opacity = '1';
+      moveCursor(e.clientX, e.clientY);
+      if (cursorEl) cursorEl.style.opacity = '1';
     }, { passive: true });
 
-    window.addEventListener('mousedown', (e) => {
-      if (root) root.classList.add('pressed');
-      createRipple(e.clientX, e.clientY);
+    window.addEventListener('mouseenter', () => {
+      if (cursorEl) cursorEl.style.opacity = '1';
     });
 
-    window.addEventListener('mouseup', () => {
-      if (root) root.classList.remove('pressed');
+    window.addEventListener('mouseleave', () => {
+      if (cursorEl) cursorEl.style.opacity = '0';
     });
 
     window.addEventListener('blur', () => {
-      if (root) root.classList.remove('pressed');
+      if (cursorEl) cursorEl.style.opacity = '0';
     });
 
-    document.addEventListener('mouseleave', () => {
-      if (root) root.style.opacity = '0';
-    });
-
-    document.addEventListener('mouseenter', () => {
-      if (root) root.style.opacity = '1';
+    window.addEventListener('focus', () => {
+      if (cursorEl) cursorEl.style.opacity = '1';
     });
   }
 
   function init() {
-    if (initialized) return;
+    if (started) return;
     if (!document.head || !document.body) return;
 
     injectStyle();
-    createCursor();
+    ensureCursor();
     bindEvents();
-    updateCursorPosition();
 
-    initialized = true;
-    console.log('[Userscript] Watermelon Triangle Cursor Fixed active');
+    started = true;
+    console.log('[Userscript] Watermelon Cursor Basic Stable active');
   }
 
   function start() {

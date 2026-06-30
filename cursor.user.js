@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Watermelon Triangle Cursor
+// @name         Watermelon Triangle Cursor Fixed
 // @namespace    https://example.com/
-// @version      1.0.0
-// @description  Replace page cursor with a triangle watermelon cursor
+// @version      1.1.0
+// @description  Stable triangle watermelon cursor that follows the real mouse
 // @match        http://*/*
 // @match        https://*/*
 // @grant        none
@@ -11,195 +11,238 @@
 (function () {
   'use strict';
 
-  let cursor;
-  let inited = false;
+  let root = null;
+  let shape = null;
+  let initialized = false;
+  let mouseX = 0;
+  let mouseY = 0;
 
   function injectStyle() {
-    if (document.getElementById('wm-cursor-style')) return;
+    if (document.getElementById('wm-cursor-fixed-style')) return;
 
     const style = document.createElement('style');
-    style.id = 'wm-cursor-style';
+    style.id = 'wm-cursor-fixed-style';
     style.textContent = `
-      * { cursor: none !important; }
+      * {
+        cursor: none !important;
+      }
 
-      #wm-cursor {
+      #wm-cursor-fixed {
         position: fixed;
         left: 0;
         top: 0;
-        width: 30px;
-        height: 30px;
+        width: 32px;
+        height: 32px;
         pointer-events: none;
         z-index: 2147483647;
-        transform: translate(-2px, -2px) scale(1);
-        transform-origin: 7px 7px;
-        transition: transform .08s ease, opacity .12s ease;
         opacity: 1;
-      }
-      #wm-cursor.pressed {
-        transform: translate(-2px, -2px) scale(0.84);
+        will-change: transform;
       }
 
-      /* 外层深绿皮 */
-      #wm-cursor .rind-outer {
+      #wm-cursor-fixed .wm-shape {
         position: absolute;
         left: 0;
         top: 0;
-        width: 0;
-        height: 0;
-        border-right: 13px solid transparent;
-        border-top: 28px solid #2e7d32;
-        transform: rotate(-45deg);
-        transform-origin: 0 0;
-        filter: drop-shadow(0 2px 2px rgba(0,0,0,.28));
+        width: 32px;
+        height: 32px;
+        transform-origin: 6px 6px;
+        transition: transform 0.08s ease, opacity 0.12s ease;
       }
 
-      /* 中层浅绿皮 */
-      #wm-cursor .rind-inner {
+      #wm-cursor-fixed.pressed .wm-shape {
+        transform: scale(0.82);
+      }
+
+      /* 外层深绿 */
+      #wm-cursor-fixed .rind-outer {
         position: absolute;
-        left: 1px;
+        left: 2px;
         top: 2px;
         width: 0;
         height: 0;
-        border-right: 11px solid transparent;
+        border-right: 14px solid transparent;
+        border-top: 28px solid #2e7d32;
+        transform: rotate(-45deg);
+        transform-origin: 0 0;
+        filter: drop-shadow(0 2px 2px rgba(0,0,0,0.25));
+      }
+
+      /* 浅绿层 */
+      #wm-cursor-fixed .rind-inner {
+        position: absolute;
+        left: 3px;
+        top: 4px;
+        width: 0;
+        height: 0;
+        border-right: 12px solid transparent;
         border-top: 24px solid #66bb6a;
         transform: rotate(-45deg);
         transform-origin: 0 0;
       }
 
       /* 白边 */
-      #wm-cursor .white {
+      #wm-cursor-fixed .white {
         position: absolute;
-        left: 2px;
-        top: 4px;
+        left: 4px;
+        top: 6px;
         width: 0;
         height: 0;
-        border-right: 9px solid transparent;
+        border-right: 10px solid transparent;
         border-top: 20px solid #fffaf0;
         transform: rotate(-45deg);
         transform-origin: 0 0;
       }
 
       /* 红瓤 */
-      #wm-cursor .flesh {
+      #wm-cursor-fixed .flesh {
         position: absolute;
-        left: 3px;
-        top: 6px;
+        left: 5px;
+        top: 8px;
         width: 0;
         height: 0;
-        border-right: 7px solid transparent;
+        border-right: 8px solid transparent;
         border-top: 16px solid #ff4d6d;
         transform: rotate(-45deg);
         transform-origin: 0 0;
       }
 
       /* 籽 */
-      #wm-cursor .seed {
+      #wm-cursor-fixed .seed {
         position: absolute;
         width: 3px;
         height: 5px;
         background: #1a1a1a;
         border-radius: 50%;
-        transform: rotate(-18deg);
+        transform: rotate(-20deg);
       }
-      #wm-cursor .s1 { left: 7px; top: 8px; }
-      #wm-cursor .s2 { left: 10px; top: 11px; }
-      #wm-cursor .s3 { left: 6px; top: 13px; }
 
-      /* 点击波纹 */
-      .wm-ripple {
+      #wm-cursor-fixed .s1 { left: 10px; top: 10px; }
+      #wm-cursor-fixed .s2 { left: 12px; top: 14px; }
+      #wm-cursor-fixed .s3 { left: 8px; top: 15px; }
+
+      .wm-click-ripple {
         position: fixed;
-        width: 14px;
-        height: 14px;
-        margin-left: -7px;
-        margin-top: -7px;
-        border: 2px solid rgba(255,77,109,.75);
+        width: 16px;
+        height: 16px;
+        margin-left: -8px;
+        margin-top: -8px;
+        border: 2px solid rgba(255, 77, 109, 0.75);
         border-radius: 50%;
         pointer-events: none;
         z-index: 2147483646;
-        animation: wm-ripple .35s ease-out forwards;
+        animation: wm-ripple-fixed 0.35s ease-out forwards;
       }
-      @keyframes wm-ripple {
-        from { transform: scale(.4); opacity: .95; }
-        to   { transform: scale(2.2); opacity: 0; }
+
+      @keyframes wm-ripple-fixed {
+        0% {
+          transform: scale(0.4);
+          opacity: 0.95;
+        }
+        100% {
+          transform: scale(2.2);
+          opacity: 0;
+        }
       }
     `;
     document.head.appendChild(style);
   }
 
   function createCursor() {
-    if (document.getElementById('wm-cursor')) {
-      cursor = document.getElementById('wm-cursor');
+    if (document.getElementById('wm-cursor-fixed')) {
+      root = document.getElementById('wm-cursor-fixed');
+      shape = root.querySelector('.wm-shape');
       return;
     }
 
-    cursor = document.createElement('div');
-    cursor.id = 'wm-cursor';
-    cursor.innerHTML = `
-      <div class="rind-outer"></div>
-      <div class="rind-inner"></div>
-      <div class="white"></div>
-      <div class="flesh"></div>
-      <div class="seed s1"></div>
-      <div class="seed s2"></div>
-      <div class="seed s3"></div>
+    root = document.createElement('div');
+    root.id = 'wm-cursor-fixed';
+    root.innerHTML = `
+      <div class="wm-shape">
+        <div class="rind-outer"></div>
+        <div class="rind-inner"></div>
+        <div class="white"></div>
+        <div class="flesh"></div>
+        <div class="seed s1"></div>
+        <div class="seed s2"></div>
+        <div class="seed s3"></div>
+      </div>
     `;
-    document.body.appendChild(cursor);
+    document.body.appendChild(root);
   }
 
-  function ripple(x, y) {
-    const el = document.createElement('div');
-    el.className = 'wm-ripple';
-    el.style.left = x + 'px';
-    el.style.top = y + 'px';
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 400);
+  function updateCursorPosition() {
+    if (!root) return;
+
+    // 让图标尖端更接近真实点击点
+    const offsetX = -3;
+    const offsetY = -3;
+    root.style.transform = `translate3d(${mouseX + offsetX}px, ${mouseY + offsetY}px, 0)`;
   }
 
-  function bind() {
-    document.addEventListener('mousemove', (e) => {
-      if (!cursor) return;
-      cursor.style.left = e.clientX + 'px';
-      cursor.style.top = e.clientY + 'px';
-      cursor.style.opacity = '1';
+  function createRipple(x, y) {
+    const ripple = document.createElement('div');
+    ripple.className = 'wm-click-ripple';
+    ripple.style.left = x + 'px';
+    ripple.style.top = y + 'px';
+    document.body.appendChild(ripple);
+
+    setTimeout(() => {
+      ripple.remove();
+    }, 400);
+  }
+
+  function bindEvents() {
+    window.addEventListener('mousemove', (e) => {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+      updateCursorPosition();
+      if (root) root.style.opacity = '1';
     }, { passive: true });
 
-    document.addEventListener('mousedown', (e) => {
-      if (!cursor) return;
-      cursor.classList.add('pressed');
-      ripple(e.clientX, e.clientY);
+    window.addEventListener('mousedown', (e) => {
+      if (root) root.classList.add('pressed');
+      createRipple(e.clientX, e.clientY);
     });
 
-    document.addEventListener('mouseup', () => {
-      if (!cursor) return;
-      cursor.classList.remove('pressed');
-    });
-
-    document.addEventListener('mouseleave', () => {
-      if (cursor) cursor.style.opacity = '0';
-    });
-
-    document.addEventListener('mouseenter', () => {
-      if (cursor) cursor.style.opacity = '1';
+    window.addEventListener('mouseup', () => {
+      if (root) root.classList.remove('pressed');
     });
 
     window.addEventListener('blur', () => {
-      if (cursor) cursor.classList.remove('pressed');
+      if (root) root.classList.remove('pressed');
+    });
+
+    document.addEventListener('mouseleave', () => {
+      if (root) root.style.opacity = '0';
+    });
+
+    document.addEventListener('mouseenter', () => {
+      if (root) root.style.opacity = '1';
     });
   }
 
   function init() {
-    if (inited) return;
+    if (initialized) return;
     if (!document.head || !document.body) return;
+
     injectStyle();
     createCursor();
-    bind();
-    inited = true;
-    console.log('[Userscript] Watermelon Triangle Cursor active');
+    bindEvents();
+    updateCursorPosition();
+
+    initialized = true;
+    console.log('[Userscript] Watermelon Triangle Cursor Fixed active');
+  }
+
+  function start() {
+    init();
+    setTimeout(init, 500);
+    setTimeout(init, 1500);
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', start);
   } else {
-    init();
+    start();
   }
 })();

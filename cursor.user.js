@@ -1,152 +1,277 @@
 // ==UserScript==
-// @name         Watermelon Cursor RAF Stable
+// @name         Watermelon Hover Inspector
 // @namespace    https://example.com/
-// @version      1.0.0
-// @description  Very stable watermelon triangle cursor using requestAnimationFrame
+// @version      1.1.0
+// @description  Watermelon highlight box with tag/id/class/size and click-to-lock
 // @match        http://*/*
 // @match        https://*/*
 // @grant        none
-// @run-at       document-idle
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  let cursor = null;
-  let started = false;
+  let overlay = null;
+  let label = null;
+  let currentEl = null;
+  let lockedEl = null;
+  let locked = false;
 
-  let mouseX = 0;
-  let mouseY = 0;
-  let visible = false;
-
-  function svgMarkup() {
-    return `
-      <svg width="28" height="28" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg">
-        <g transform="rotate(-45 8 8)">
-          <path d="M2 2 L2 24 L18 8 Z" fill="#2e7d32"/>
-          <path d="M3.5 4 L3.5 22 L16 8 Z" fill="#66bb6a"/>
-          <path d="M5 6 L5 20 L14 8 Z" fill="#fffaf0"/>
-          <path d="M6 7.5 L6 18.5 L12.5 8 Z" fill="#ff4d6d"/>
-
-          <ellipse cx="8.8" cy="9.6" rx="1.1" ry="1.8" fill="#1a1a1a"/>
-          <ellipse cx="9.5" cy="13.2" rx="1.1" ry="1.8" fill="#1a1a1a"/>
-          <ellipse cx="7.7" cy="15.8" rx="1.1" ry="1.8" fill="#1a1a1a"/>
-        </g>
-      </svg>
-    `;
-  }
-
-  function injectStyle() {
-    if (document.getElementById('wm-raf-style')) return;
+  function createUI() {
+    if (document.getElementById('wm-inspector-overlay')) return;
 
     const style = document.createElement('style');
-    style.id = 'wm-raf-style';
+    style.id = 'wm-inspector-style';
     style.textContent = `
-      html, body, * {
-        cursor: none !important;
-      }
-
-      #wm-raf-cursor {
+      #wm-inspector-overlay {
         position: fixed;
         left: 0;
         top: 0;
-        width: 28px;
-        height: 28px;
-        pointer-events: none !important;
-        z-index: 2147483647 !important;
+        width: 0;
+        height: 0;
+        pointer-events: none;
+        z-index: 2147483646;
+        box-sizing: border-box;
+        border: 2px solid #2e7d32;
+        border-radius: 8px;
+        background: rgba(255, 77, 109, 0.10);
+        box-shadow:
+          0 0 0 2px #fffaf0 inset,
+          0 0 0 4px #66bb6a inset,
+          0 0 0 6px rgba(255, 77, 109, 0.18) inset,
+          0 4px 14px rgba(0,0,0,0.16);
+        transition:
+          left 0.04s ease,
+          top 0.04s ease,
+          width 0.04s ease,
+          height 0.04s ease,
+          opacity 0.12s ease;
         opacity: 0;
-        will-change: transform, opacity;
       }
 
-      #wm-raf-cursor svg {
-        display: block;
-        width: 28px;
-        height: 28px;
-        filter: drop-shadow(0 1px 2px rgba(0,0,0,0.22));
+      #wm-inspector-overlay.locked {
+        border-color: #1b5e20;
+        box-shadow:
+          0 0 0 2px #fffaf0 inset,
+          0 0 0 4px #66bb6a inset,
+          0 0 0 6px rgba(255, 77, 109, 0.24) inset,
+          0 0 0 2px rgba(27, 94, 32, 0.25),
+          0 6px 16px rgba(0,0,0,0.20);
+      }
+
+      #wm-inspector-label {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        z-index: 2147483647;
+        max-width: 420px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgba(20, 20, 20, 0.9);
+        color: #fff;
+        font: 12px/1.45 Arial, sans-serif;
+        pointer-events: none;
+        box-shadow: 0 6px 16px rgba(0,0,0,0.22);
+        opacity: 0;
+        transition: opacity 0.12s ease;
+      }
+
+      #wm-inspector-label .wm-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 4px;
+        font-weight: 700;
+      }
+
+      #wm-inspector-label .wm-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        flex: 0 0 auto;
+        background: linear-gradient(
+          135deg,
+          #2e7d32 0%,
+          #66bb6a 28%,
+          #fffaf0 48%,
+          #ff4d6d 100%
+        );
+      }
+
+      #wm-inspector-label .wm-line {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      #wm-inspector-label .wm-muted {
+        color: rgba(255,255,255,0.72);
+      }
+
+      #wm-inspector-label .wm-lock {
+        color: #ffd54f;
+        font-weight: 700;
+        margin-left: 4px;
       }
     `;
     document.head.appendChild(style);
+
+    overlay = document.createElement('div');
+    overlay.id = 'wm-inspector-overlay';
+
+    label = document.createElement('div');
+    label.id = 'wm-inspector-label';
+
+    document.body.appendChild(overlay);
+    document.body.appendChild(label);
   }
 
-  function ensureCursor() {
-    if (cursor && document.body.contains(cursor)) return cursor;
-
-    cursor = document.getElementById('wm-raf-cursor');
-    if (cursor && document.body.contains(cursor)) return cursor;
-
-    cursor = document.createElement('div');
-    cursor.id = 'wm-raf-cursor';
-    cursor.innerHTML = svgMarkup();
-    document.body.appendChild(cursor);
-
-    return cursor;
+  function shouldIgnore(el) {
+    if (!el) return true;
+    if (el === overlay || el === label) return true;
+    if (el.id === 'wm-inspector-overlay' || el.id === 'wm-inspector-label') return true;
+    return false;
   }
 
-  function render() {
-    if (cursor) {
-      const offsetX = -2;
-      const offsetY = -2;
-      cursor.style.transform = `translate3d(${mouseX + offsetX}px, ${mouseY + offsetY}px, 0)`;
-      cursor.style.opacity = visible ? '1' : '0';
-    }
-    requestAnimationFrame(render);
+  function escapeHtml(str) {
+    return String(str)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
   }
 
-  function bindEvents() {
-    const update = (e) => {
-      mouseX = e.clientX;
-      mouseY = e.clientY;
-      visible = true;
+  function getClassText(el) {
+    if (typeof el.className !== 'string') return '';
+    const arr = el.className.trim().split(/\s+/).filter(Boolean).slice(0, 5);
+    return arr.length ? '.' + arr.join('.') : '';
+  }
+
+  function getElementInfo(el) {
+    const tag = el.tagName ? el.tagName.toLowerCase() : 'unknown';
+    const id = el.id ? `#${el.id}` : '';
+    const classes = getClassText(el);
+    const rect = el.getBoundingClientRect();
+    const width = Math.round(rect.width);
+    const height = Math.round(rect.height);
+
+    return {
+      tag,
+      id,
+      classes,
+      width,
+      height
     };
+  }
 
-    window.addEventListener('mousemove', update, { passive: true });
-    document.addEventListener('mousemove', update, { passive: true });
-    document.documentElement.addEventListener('mousemove', update, { passive: true });
+  function renderLabel(el) {
+    const info = getElementInfo(el);
+    label.innerHTML = `
+      <div class="wm-title">
+        <span class="wm-dot"></span>
+        <span>Watermelon Inspector${locked ? '<span class="wm-lock">[LOCKED]</span>' : ''}</span>
+      </div>
+      <div class="wm-line">&lt;${escapeHtml(info.tag)}&gt;</div>
+      <div class="wm-line">${escapeHtml(info.id || '(no id)')}</div>
+      <div class="wm-line">${escapeHtml(info.classes || '(no class)')}</div>
+      <div class="wm-line wm-muted">${info.width} × ${info.height}</div>
+    `;
+    label.style.opacity = '1';
+  }
 
-    window.addEventListener('mouseenter', () => {
-      visible = true;
-    });
+  function updateOverlay(el) {
+    if (!el || shouldIgnore(el)) return;
 
-    window.addEventListener('mouseleave', () => {
-      visible = false;
-    });
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 2 || rect.height < 2) return;
 
-    document.addEventListener('mouseleave', () => {
-      visible = false;
-    });
+    overlay.style.left = rect.left + 'px';
+    overlay.style.top = rect.top + 'px';
+    overlay.style.width = rect.width + 'px';
+    overlay.style.height = rect.height + 'px';
+    overlay.style.opacity = '1';
 
-    window.addEventListener('blur', () => {
-      visible = false;
-    });
+    renderLabel(el);
+    currentEl = el;
 
-    window.addEventListener('focus', () => {
-      visible = true;
-    });
+    if (locked) {
+      overlay.classList.add('locked');
+    } else {
+      overlay.classList.remove('locked');
+    }
+  }
+
+  function clearOverlay() {
+    overlay.style.opacity = '0';
+    label.style.opacity = '0';
+  }
+
+  function toggleLock(el) {
+    if (!el || shouldIgnore(el)) return;
+
+    if (locked && lockedEl === el) {
+      locked = false;
+      lockedEl = null;
+      overlay.classList.remove('locked');
+      return;
+    }
+
+    locked = true;
+    lockedEl = el;
+    updateOverlay(el);
   }
 
   function init() {
-    if (started) return;
-    if (!document.head || !document.body) return;
+    if (!document.body || !document.head) return;
+    createUI();
 
-    injectStyle();
-    ensureCursor();
-    bindEvents();
-    render();
+    document.addEventListener('mousemove', (e) => {
+      if (locked) return;
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || shouldIgnore(el)) return;
+      if (el === currentEl) return;
+      updateOverlay(el);
+    }, { passive: true });
 
-    started = true;
-    console.log('[Userscript] Watermelon Cursor RAF Stable active');
-  }
+    document.addEventListener('click', (e) => {
+      const el = document.elementFromPoint(e.clientX, e.clientY);
+      if (!el || shouldIgnore(el)) return;
 
-  function start() {
-    init();
-    setTimeout(init, 300);
-    setTimeout(init, 1000);
-    setTimeout(init, 2000);
+      toggleLock(el);
+
+      // 防止锁定时跳到别的元素
+      if (locked && lockedEl) {
+        updateOverlay(lockedEl);
+      }
+    }, true);
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        locked = false;
+        lockedEl = null;
+        overlay.classList.remove('locked');
+      }
+    });
+
+    window.addEventListener('scroll', () => {
+      const target = locked ? lockedEl : currentEl;
+      if (target) updateOverlay(target);
+    }, { passive: true });
+
+    window.addEventListener('resize', () => {
+      const target = locked ? lockedEl : currentEl;
+      if (target) updateOverlay(target);
+    });
+
+    document.addEventListener('mouseleave', () => {
+      if (!locked) clearOverlay();
+    });
   }
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', start);
+    document.addEventListener('DOMContentLoaded', init);
   } else {
-    start();
+    init();
   }
 })();

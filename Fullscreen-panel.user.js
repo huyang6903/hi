@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         TV Video Fullscreen Button (Enhanced)
+// @name         Video Floating Button (Auto-Follow)
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  Fixed video detection + configurable button position for TV remotes
+// @version      3.0
+// @description  Floating button that auto-follows video position (TV remote friendly)
 // @author       Your Name
 // @match        *://*/*
 // @grant        none
@@ -12,284 +12,262 @@
 (function() {
     'use strict';
 
-    // ==== 可自定义配置项 ====
+    // ==== 配置项 ====
     const CONFIG = {
-        // 悬浮按钮位置（根据电视遥控器习惯调整）
-        buttonPosition: {
-            top: 'auto',      // 'auto' 或具体像素值（如 '50px'）
-            bottom: '150px',  // 建议设为较大值（如 '150px'）方便底部导航
-            left: 'auto',
-            right: '20px'
-        },
-        // 按钮尺寸（增大更易聚焦）
-        buttonSize: 80, // 按钮宽度/高度（像素）
-        // 视频检测增强
-        videoDetection: {
-            includeIframe: true,       // 检测iframe中的视频（如YouTube嵌入）
-            includeHiddenVideos: false, // 是否检测隐藏的视频（默认关闭）
-            minVideoWidth: 300,        // 最小视频宽度（过滤小广告）
-            retryInterval: 1000        // 视频检测重试间隔（毫秒）
-        },
-        // 其他样式配置
-        buttonStyle: `
-            background: #FF5722;
-            color: white;
-            border: 4px solid rgba(255,255,255,0.8);
-            font-size: 28px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
-            opacity: 0.9;
-        `,
-        focusStyle: `
-            transform: scale(1.2);
-            opacity: 1;
-            box-shadow: 0 0 0 5px #4CAF50, 0 0 25px rgba(76, 175, 80, 0.8);
-        `,
-        autoHide: true,
-        hideDelay: 3000
+        buttonSize: 80, // 按钮尺寸（像素）
+        followOffset: 15, // 按钮与视频边缘的距离（像素）
+        autoHideDelay: 3000, // 无操作自动隐藏延迟（毫秒）
+        manualSelectHoldTime: 1500, // 长按触发手动选择的时间（毫秒）
+        minVideoSize: 300 // 最小视频宽度（像素，过滤小广告）
     };
-    // ========================
 
-    let fullscreenButton;
-    let hideTimeout;
-    let lastActivityTime = Date.now();
-    let videoCheckInterval;
+    let floatingButton, targetVideo = null;
+    let hideTimeout, manualSelectTimer, isFollowing = false;
 
-    // 创建悬浮按钮（位置可配置）
-    function createFloatingButton() {
-        fullscreenButton = document.createElement('button');
-        fullscreenButton.innerHTML = '⛶';
-        fullscreenButton.tabIndex = 0; // 确保遥控器可聚焦
-
-        // 应用位置和尺寸配置
-        const positionStyle = Object.entries(CONFIG.buttonPosition)
-            .map(([key, value]) => `${key}: ${value};`)
-            .join(' ');
-
-        fullscreenButton.style.cssText = `
-            position: fixed;
-            ${positionStyle}
-            width: ${CONFIG.buttonSize}px;
-            height: ${CONFIG.buttonSize}px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            z-index: 99999;
-            outline: none;
-            ${CONFIG.buttonStyle}
-            transition: all 0.2s ease;
-        `;
-
-        // 点击事件
-        fullscreenButton.addEventListener('click', () => {
-            enterFullscreen(getActiveVideo());
-            resetHideTimeout();
-        });
-
-        // 遥控器焦点样式
-        fullscreenButton.addEventListener('focus', () => {
-            fullscreenButton.style.cssText += CONFIG.focusStyle;
-            resetHideTimeout();
-        });
-        fullscreenButton.addEventListener('blur', () => {
-            fullscreenButton.style.cssText = `
-                position: fixed;
-                ${positionStyle}
-                width: ${CONFIG.buttonSize}px;
-                height: ${CONFIG.buttonSize}px;
-                border-radius: 50%;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                cursor: pointer;
-                z-index: 99999;
-                outline: none;
-                ${CONFIG.buttonStyle}
-                transition: all 0.2s ease;
-            `;
-            resetHideTimeout();
-        });
-
-        document.body.appendChild(fullscreenButton);
-        setupAutoHide();
-    }
-
-    // ==== 修复视频检测逻辑 ====
-    function getActiveVideo() {
-        const videos = [];
-
-        // 1. 检测原生 video 标签
-        document.querySelectorAll('video').forEach(video => {
-            if (isValidVideo(video)) {
-                videos.push({
-                    element: video,
-                    priority: 2, // 原生视频优先级高
-                    area: (video.offsetWidth || 0) * (video.offsetHeight || 0)
-                });
-            }
-        });
-
-        // 2. 检测 iframe 中的视频（如 YouTube）
-        if (CONFIG.videoDetection.includeIframe) {
-            document.querySelectorAll('iframe').forEach(iframe => {
-                // 常见视频平台的 iframe
-                const videoIframePatterns = [
-                    'youtube.com/embed/',
-                    'vimeo.com/video/',
-                    'dailymotion.com/embed/',
-                    'netflix.com/watch',
-                    'primevideo.com/detail'
-                ];
-                const isVideoIframe = videoIframePatterns.some(pattern => 
-                    iframe.src.includes(pattern)
-                );
-
-                if (isVideoIframe && isValidIframe(iframe)) {
-                    videos.push({
-                        element: iframe,
-                        priority: 1, // iframe 视频优先级次之
-                        area: (iframe.offsetWidth || 0) * (iframe.offsetHeight || 0)
-                    });
-                }
-            });
-        }
-
-        // 3. 按优先级和尺寸排序，返回最佳视频
-        if (videos.length > 0) {
-            return videos.sort((a, b) => {
-                if (b.priority !== a.priority) return b.priority - a.priority;
-                return b.area - a.area; // 同优先级按面积排序
-            })[0].element;
-        }
-
-        return null;
-    }
-
-    // 验证视频是否有效
-    function isValidVideo(video) {
-        // 可见性检查
-        if (!CONFIG.videoDetection.includeHiddenVideos && 
-            (video.offsetParent === null || video.style.display === 'none')) {
-            return false;
-        }
-        // 尺寸检查
-        if (video.offsetWidth < CONFIG.videoDetection.minVideoWidth) {
-            return false;
-        }
-        // 排除静音广告（可选）
-        // if (video.muted && video.duration < 30) return false;
-        return true;
-    }
-
-    // 验证 iframe 是否有效
-    function isValidIframe(iframe) {
-        return iframe.offsetParent !== null && 
-               iframe.offsetWidth >= CONFIG.videoDetection.minVideoWidth &&
-               !iframe.src.includes('ads.') && // 排除广告 iframe
-               !iframe.src.includes('doubleclick.net');
-    }
-
-    // 持续检测视频（修复延迟加载问题）
-    function startVideoDetection() {
-        videoCheckInterval = setInterval(() => {
-            const hasVideo = getActiveVideo() !== null;
-            if (hasVideo) {
-                showButton();
-            } else if (CONFIG.autoHide) {
-                hideButton();
-            }
-        }, CONFIG.videoDetection.retryInterval);
-    }
-
-    // ==== 其他辅助函数 ====
-    function showButton() {
-        if (fullscreenButton) {
-            fullscreenButton.style.display = 'flex';
-            fullscreenButton.style.opacity = CONFIG.buttonStyle.includes('opacity') 
-                ? CONFIG.buttonStyle.match(/opacity: ([^;]+)/)[1] 
-                : '0.9';
-        }
-    }
-
-    function hideButton() {
-        if (fullscreenButton && CONFIG.autoHide) {
-            fullscreenButton.style.opacity = '0.3';
-            fullscreenButton.style.transform = 'scale(0.9)';
-        }
-    }
-
-    function resetHideTimeout() {
-        if (hideTimeout) clearTimeout(hideTimeout);
-        hideTimeout = setTimeout(() => {
-            if (Date.now() - lastActivityTime > CONFIG.hideDelay) {
-                hideButton();
-            }
-        }, CONFIG.hideDelay);
-    }
-
-    function setupAutoHide() {
-        if (CONFIG.autoHide) {
-            resetHideTimeout();
-            ['mousemove', 'click', 'keydown', 'touchstart'].forEach(event => {
-                document.addEventListener(event, () => {
-                    lastActivityTime = Date.now();
-                    showButton();
-                    resetHideTimeout();
-                });
-            });
-        } else {
-            showButton();
-        }
-    }
-
-    function enterFullscreen(element) {
-        if (!element) {
-            showToast('No video found');
+    // ==== 核心：视频跟踪与按钮定位 ====
+    function trackVideoPosition() {
+        // 1. 找到最佳视频（最大可见视频）
+        const bestVideo = findBestVideo();
+        if (!bestVideo) {
+            hideButton();
+            targetVideo = null;
+            isFollowing = false;
             return;
         }
 
-        try {
-            const target = element.tagName === 'IFRAME' ? element : element;
-            if (target.requestFullscreen) {
-                target.requestFullscreen();
-            } else if (target.webkitRequestFullscreen) {
-                target.webkitRequestFullscreen();
-            } else if (target.msRequestFullscreen) {
-                target.msRequestFullscreen();
-            } else {
-                showToast('Fullscreen not supported');
+        targetVideo = bestVideo;
+        isFollowing = true;
+        showButton();
+
+        // 2. 获取视频位置并定位按钮
+        const videoRect = targetVideo.getBoundingClientRect();
+        const buttonStyle = {
+            // 按钮定位在视频右下角外侧
+            top: `${videoRect.bottom + window.scrollY + CONFIG.followOffset}px`,
+            left: `${videoRect.right + window.scrollX - CONFIG.buttonSize - CONFIG.followOffset}px`,
+            position: 'absolute', // 使用绝对定位跟随视频
+            zIndex: 99999
+        };
+
+        // 应用定位样式
+        Object.assign(floatingButton.style, buttonStyle);
+    }
+
+    // 查找最佳视频（最大可见视频）
+    function findBestVideo() {
+        const videos = [];
+
+        // 1. 收集所有可能的视频元素
+        document.querySelectorAll('video, iframe, div[class*="video"], div[class*="player"]').forEach(element => {
+            const rect = element.getBoundingClientRect();
+            // 过滤条件：可见 + 宽度达标 + 有一定面积
+            if (rect.width >= CONFIG.minVideoSize && 
+                rect.height > 100 && 
+                rect.top < window.innerHeight && 
+                rect.bottom > 0 && 
+                element.offsetParent !== null) {
+                videos.push({
+                    element,
+                    area: rect.width * rect.height,
+                    rect
+                });
             }
-        } catch (e) {
-            console.error('Fullscreen error:', e);
-            showToast('Failed to fullscreen');
+        });
+
+        // 2. 返回面积最大的视频
+        return videos.sort((a, b) => b.area - a.area)[0]?.element || null;
+    }
+
+    // ==== 悬浮按钮 ====
+    function createFloatingButton() {
+        floatingButton = document.createElement('button');
+        floatingButton.innerHTML = '⛶';
+        floatingButton.tabIndex = 0; // 支持遥控器聚焦
+        floatingButton.style.cssText = `
+            width: ${CONFIG.buttonSize}px;
+            height: ${CONFIG.buttonSize}px;
+            border-radius: 50%;
+            background: #FF5722;
+            color: white;
+            border: 4px solid white;
+            font-size: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            cursor: pointer;
+            outline: none;
+            transition: all 0.2s ease;
+            opacity: 0.9;
+        `;
+
+        // 点击事件：全屏当前视频
+        floatingButton.addEventListener('click', () => {
+            if (targetVideo) {
+                enterFullscreen(targetVideo);
+                resetAutoHide();
+            } else {
+                enterManualSelectMode();
+            }
+        });
+
+        // 长按触发手动选择
+        floatingButton.addEventListener('mousedown', () => {
+            manualSelectTimer = setTimeout(enterManualSelectMode, CONFIG.manualSelectHoldTime);
+        });
+        floatingButton.addEventListener('mouseup', () => clearTimeout(manualSelectTimer));
+        floatingButton.addEventListener('mouseleave', () => clearTimeout(manualSelectTimer));
+
+        // 遥控器焦点样式
+        floatingButton.addEventListener('focus', () => {
+            floatingButton.style.transform = 'scale(1.2)';
+            floatingButton.style.boxShadow = '0 0 0 5px #4CAF50';
+            resetAutoHide();
+        });
+        floatingButton.addEventListener('blur', () => {
+            floatingButton.style.transform = 'scale(1)';
+            floatingButton.style.boxShadow = '0 4px 20px rgba(0,0,0,0.5)';
+            resetAutoHide();
+        });
+
+        document.body.appendChild(floatingButton);
+        hideButton(); // 初始隐藏
+    }
+
+    // ==== 自动隐藏/显示 ====
+    function showButton() {
+        floatingButton.style.display = 'flex';
+        floatingButton.style.opacity = '0.9';
+        resetAutoHide();
+    }
+
+    function hideButton() {
+        if (!floatingButton.matches(':focus')) { // 焦点在按钮上时不隐藏
+            floatingButton.style.opacity = '0.3';
         }
     }
 
+    function resetAutoHide() {
+        if (hideTimeout) clearTimeout(hideTimeout);
+        hideTimeout = setTimeout(hideButton, CONFIG.autoHideDelay);
+    }
+
+    // ==== 手动选择模式 ====
+    function enterManualSelectMode() {
+        const videos = findAllVideos();
+        if (videos.length === 0) {
+            showToast('No videos found');
+            return;
+        }
+
+        // 创建选择菜单
+        const menu = document.createElement('div');
+        menu.style.cssText = `
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9); padding: 20px; border-radius: 10px;
+            z-index: 999999; width: 80%; max-width: 600px;
+        `;
+        menu.innerHTML = '<h3 style="color:white; font-size:28px; text-align:center;">Select Video</h3>';
+
+        videos.forEach((video, index) => {
+            const item = document.createElement('button');
+            item.style.cssText = `
+                width: 100%; padding: 15px; margin: 8px 0; text-align:left;
+                background: ${index === 0 ? '#4CAF50' : '#333'}; color: white;
+                border: 2px solid white; border-radius: 5px; font-size: 24px;
+            `;
+            item.textContent = `Video ${index + 1} (${Math.round(video.area/1000)}k px²)`;
+            item.tabIndex = index;
+            item.addEventListener('click', () => {
+                targetVideo = video.element;
+                enterFullscreen(targetVideo);
+                menu.remove();
+                trackVideoPosition(); // 重新定位按钮
+            });
+            item.addEventListener('focus', () => {
+                videos.forEach((v, i) => {
+                    menu.children[i+1].style.background = i === index ? '#4CAF50' : '#333';
+                });
+            });
+            menu.appendChild(item);
+        });
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.style.cssText = `
+            width: 100%; padding: 15px; margin-top: 15px;
+            background: #f44336; color: white; border: none;
+            border-radius: 5px; font-size: 24px;
+        `;
+        cancelBtn.addEventListener('click', () => menu.remove());
+        menu.appendChild(cancelBtn);
+
+        document.body.appendChild(menu);
+        menu.querySelector('button').focus();
+    }
+
+    function findAllVideos() {
+        return Array.from(document.querySelectorAll('video, iframe, div[class*="video"], div[class*="player"]'))
+            .filter(el => {
+                const rect = el.getBoundingClientRect();
+                return rect.width >= 200 && rect.height > 100 && el.offsetParent !== null;
+            })
+            .map(el => ({
+                element: el,
+                area: el.getBoundingClientRect().width * el.getBoundingClientRect().height
+            }))
+            .sort((a, b) => b.area - a.area);
+    }
+
+    // ==== 全屏功能 ====
+    function enterFullscreen(element) {
+        try {
+            if (element.requestFullscreen) {
+                element.requestFullscreen();
+            } else if (element.webkitRequestFullscreen) {
+                element.webkitRequestFullscreen();
+            } else if (element.msRequestFullscreen) {
+                element.msRequestFullscreen();
+            } else {
+                // 尝试全屏父容器
+                const parent = element.closest('div[class*="player"], div[class*="video"]');
+                if (parent) enterFullscreen(parent);
+                else showToast('Fullscreen not supported');
+            }
+        } catch (e) {
+            showToast('Fullscreen failed');
+            console.error(e);
+        }
+    }
+
+    // ==== 辅助函数 ====
     function showToast(message) {
         const toast = document.createElement('div');
         toast.textContent = message;
         toast.style.cssText = `
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.8);
-            color: white;
-            padding: 20px 40px;
-            border-radius: 10px;
-            font-size: 32px;
-            z-index: 999999;
+            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8); color: white; padding: 20px 40px;
+            border-radius: 10px; font-size: 32px; z-index: 999999;
         `;
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 2000);
     }
 
-    // 初始化
+    // ==== 初始化 ====
     function init() {
         createFloatingButton();
-        startVideoDetection();
-        console.log('Enhanced TV Video Button loaded. Position:', CONFIG.buttonPosition);
+        
+        // 持续跟踪视频位置（每300ms更新一次）
+        setInterval(trackVideoPosition, 300);
+        
+        // 监听滚动和窗口大小变化
+        window.addEventListener('scroll', trackVideoPosition);
+        window.addEventListener('resize', trackVideoPosition);
+        
+        // 初始化自动隐藏
+        resetAutoHide();
+        
+        console.log('Auto-follow video button loaded');
     }
 
     init();

@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Human Verification Helper (Delayed Load Support)
+// @name         Human Verification Helper (Highlight & Focus)
 // @namespace    http://tampermonkey.net/
-// @version      1.1
-// @description  Highlights "Verify you are human" checkboxes with delayed load support (no auto-click)
+// @version      1.0
+// @description  Highlights and focuses "Verify you are human" checkboxes (no auto-click)
 // @author       Your Name
 // @match        *://*/*
 // @grant        none
@@ -12,134 +12,111 @@
 (function() {
     'use strict';
 
-    // 配置：增强延迟加载支持
+    // 配置：验证框关键词和样式
     const CONFIG = {
-        keywords: ['verify you are human', 'human verification', '我不是机器人', '验证人类', 'are you human'],
+        // 验证框相关关键词（中英文）
+        keywords: ['verify you are human', 'human verification', '我不是机器人', '验证人类'],
+        // 高亮样式（黄色边框+脉动动画，醒目但不影响页面）
         highlightStyle: `
-            box-shadow: 0 0 0 2px #4CAF50, 0 0 15px rgba(76, 175, 80, 0.6) !important;
+            box-shadow: 0 0 0 2px #ffeb3b, 0 0 10px rgba(255, 235, 59, 0.5) !important;
             animation: pulse 2s infinite !important;
             z-index: 9999 !important;
         `,
+        // 检查间隔（毫秒）
+        checkInterval: 1000,
+        // 动画样式
         pulseAnimation: `
             @keyframes pulse {
-                0% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0.7); }
-                70% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); }
-                100% { box-shadow: 0 0 0 0 rgba(76, 175, 80, 0); }
+                0% { box-shadow: 0 0 0 0 rgba(255, 235, 59, 0.7); }
+                70% { box-shadow: 0 0 0 8px rgba(255, 235, 59, 0); }
+                100% { box-shadow: 0 0 0 0 rgba(255, 235, 59, 0); }
             }
-        `,
-        // 检测配置（解决延迟加载问题）
-        initialCheckDelay: 1000,       // 初始检查延迟（给页面加载留出时间）
-        regularCheckInterval: 2000,    // 常规检测间隔（毫秒）
-        extendedCheckDuration: 60000,  // 延长检测时长（1分钟，可根据需求调整）
-        maxCheckCycles: 30,            // 最大检测次数（= extendedCheckDuration / regularCheckInterval）
-        giveUpMessage: 'Verification helper: No verification box found after 1 minute. You can manually check.'
+        `
     };
 
-    let checkCycle = 0;
-    let checkInterval;
-    let observer;
-
-    // 添加动画样式
+    // 添加脉动动画样式到页面
     function addAnimationStyle() {
         const style = document.createElement('style');
         style.textContent = CONFIG.pulseAnimation;
         document.head.appendChild(style);
     }
 
-    // 关键词匹配
+    // 检查元素是否包含验证关键词
     function hasVerificationKeyword(element) {
         const text = (element.textContent || element.innerText || '').toLowerCase();
         return CONFIG.keywords.some(keyword => text.includes(keyword.toLowerCase()));
     }
 
-    // 查找验证框
+    // 查找并处理验证框
     function findVerificationElements() {
+        // 可能的验证框容器/复选框元素
         const candidateSelectors = [
-            'input[type="checkbox"]:not([disabled])',
-            'div[role="checkbox"]:not([aria-disabled="true"])',
-            'button[class*="verify"], div[class*="verify"], span[class*="verify"]',
+            'input[type="checkbox"]',
+            'div[role="checkbox"]',
+            'button[class*="verify"], div[class*="verify"]',
             'label:has(input[type="checkbox"])',
-            'div[class*="captcha"], div[class*="robot"]'
+            'div:contains("verify")'
         ];
 
         let foundElement = null;
 
+        // 遍历所有候选元素
         candidateSelectors.forEach(selector => {
             document.querySelectorAll(selector).forEach(element => {
-                // 检查元素可见性和关键词（包括父元素）
+                // 过滤可见元素且包含关键词
                 if (element.offsetParent !== null && 
                     (hasVerificationKeyword(element) || 
                      hasVerificationKeyword(element.parentElement) ||
-                     hasVerificationKeyword(element.closest('div, section, form')))) {
+                     hasVerificationKeyword(element.closest('div')))) {
                     foundElement = element;
                 }
             });
         });
 
         if (foundElement) {
-            highlightAndFocus(foundElement);
-            stopChecking(); // 找到后停止检测
-        } else if (checkCycle >= CONFIG.maxCheckCycles) {
-            console.log(CONFIG.giveUpMessage);
-            stopChecking(); // 达到最大次数后停止
-        } else {
-            checkCycle++;
-            console.log(`Verification helper: Checking for box (attempt ${checkCycle}/${CONFIG.maxCheckCycles})`);
+            highlightElement(foundElement);
+            focusElement(foundElement);
         }
     }
 
-    // 高亮并聚焦
-    function highlightAndFocus(element) {
+    // 高亮元素
+    function highlightElement(element) {
+        // 保存原始样式，避免覆盖
         const originalStyle = element.getAttribute('style') || '';
         element.setAttribute('style', originalStyle + CONFIG.highlightStyle);
         
-        // 验证通过后恢复样式
-        const attrObserver = new MutationObserver(() => {
+        // 验证通过后恢复样式（监听变化）
+        const observer = new MutationObserver(() => {
             if (element.checked || element.getAttribute('aria-checked') === 'true') {
                 element.setAttribute('style', originalStyle);
-                attrObserver.disconnect();
+                observer.disconnect();
             }
         });
-        attrObserver.observe(element, { attributes: true, attributeFilter: ['checked', 'aria-checked', 'style'] });
+        observer.observe(element, { attributes: true, attributeFilter: ['checked', 'aria-checked', 'style'] });
+    }
 
-        // 滚动并聚焦
+    // 聚焦元素（滚动到视图并设置焦点）
+    function focusElement(element) {
+        // 如果是复选框直接聚焦，否则聚焦其父容器
         const focusTarget = element.tagName === 'INPUT' ? element : element.querySelector('input, button') || element;
         if (focusTarget) {
             focusTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
             focusTarget.focus({ preventScroll: false });
-            console.log('Verification box found! Please click manually.');
+            console.log('Verification element focused - please click manually');
         }
     }
 
-    // 停止检测（清理定时器和观察者）
-    function stopChecking() {
-        if (checkInterval) clearInterval(checkInterval);
-        if (observer) observer.disconnect();
-    }
-
-    // 初始化检测流程
+    // 初始化
     function init() {
         addAnimationStyle();
-        
-        // 初始延迟后开始检测（给页面加载留出时间）
-        setTimeout(() => {
-            findVerificationElements(); // 首次检测
-            
-            // 启动定期检测
-            checkInterval = setInterval(findVerificationElements, CONFIG.regularCheckInterval);
-            
-            // 监听DOM变化（捕捉动态加载的弹框）
-            observer = new MutationObserver(findVerificationElements);
-            observer.observe(document.body, { 
-                childList: true, 
-                subtree: true,
-                attributes: true,
-                attributeFilter: ['class', 'style', 'aria-checked']
-            });
-            
-        }, CONFIG.initialCheckDelay);
-
-        console.log('Verification helper started (will check for 1 minute)');
+        // 初始检查
+        findVerificationElements();
+        // 定时检查（处理动态加载的验证框）
+        setInterval(findVerificationElements, CONFIG.checkInterval);
+        // 监听页面变化
+        const observer = new MutationObserver(findVerificationElements);
+        observer.observe(document.body, { childList: true, subtree: true });
+        console.log('Human Verification Helper initialized (no auto-click)');
     }
 
     // 启动脚本

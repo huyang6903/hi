@@ -22,7 +22,7 @@
             right: '20px'
         },
         // 按钮尺寸（增大更易聚焦）
-        buttonSize: 180, // 按钮宽度/高度（像素）
+        buttonSize: 80, // 按钮宽度/高度（像素）
         // 视频检测增强
         videoDetection: {
             includeIframe: true,       // 检测iframe中的视频（如YouTube嵌入）

@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Auto Click Robot Verification Checkbox
+// @name         Simple Human Verification Auto-Clicker
 // @namespace    http://tampermonkey.net/
-// @version      0.1
-// @description  A script to automatically click robot verification checkboxes (for educational purposes only)
+// @version      0.2
+// @description  Auto-click simple "Verify you are human" checkboxes (for educational use only)
 // @author       Your Name
 // @match        *://*/*
 // @grant        none
@@ -12,87 +12,72 @@
 (function() {
     'use strict';
 
-    // 配置：验证码复选框的常见选择器
-    const CHECKBOX_SELECTORS = [
-        // reCAPTCHA v2 经典复选框
-        'div.g-recaptcha div.recaptcha-checkbox-checkmark',
-        'div.g-recaptcha iframe',
-        'iframe[src*="recaptcha/api2/anchor"]',
-        // hCaptcha 复选框
-        'div.h-captcha iframe',
-        'iframe[src*="hcaptcha.com/anchor"]',
-        // 其他常见验证码选择器（可根据实际情况扩展）
-        'input[type="checkbox"][name*="robot"][id*="robot"]',
-        'div.robot-check-checkbox',
-        'button.verification-checkbox'
+    // 仅针对简单复选框验证的核心选择器（避免复杂验证）
+    const TARGET_SELECTORS = [
+        // 包含"human"关键词的标签附近的复选框
+        'input[type="checkbox"]:not([disabled]) + label:contains("human"), input[type="checkbox"]:not([disabled])[id*="human"], input[type="checkbox"]:not([disabled])[name*="human"]',
+        // 常见验证按钮/方框
+        'div[class*="verify-human"], div[class*="robot-check"]:not([style*="none"]), button[class*="verify-btn"]:not([disabled])',
+        // 直接可见的验证复选框（无iframe包裹的简单场景）
+        'input[type="checkbox"]:not([disabled]):visible'
     ];
 
-    // 配置：检查和点击的时间间隔（毫秒）
-    const CHECK_INTERVAL = 500;
-    // 最大尝试次数（避免无限循环）
-    const MAX_ATTEMPTS = 20;
+    // 配置参数
+    const CHECK_DELAY = 800; // 检查间隔（毫秒）
+    const MAX_RETRIES = 10;  // 最大重试次数
+    let retryCount = 0;
 
-    let attemptCount = 0;
+    // 检查元素是否可见
+    function isElementVisible(element) {
+        return element.offsetParent !== null && 
+               element.style.opacity !== '0' && 
+               element.style.display !== 'none';
+    }
 
-    // 尝试点击验证码复选框
-    function tryClickVerification() {
-        if (attemptCount >= MAX_ATTEMPTS) {
-            console.log('Auto verification stopped: Max attempts reached');
+    // 尝试点击验证方框
+    function attemptVerification() {
+        if (retryCount >= MAX_RETRIES) {
+            console.log('[Auto-Verify] Max retries reached, stopping');
             return;
         }
 
-        attemptCount++;
-        let clicked = false;
+        retryCount++;
+        let found = false;
 
-        // 遍历所有选择器尝试找到并点击
-        CHECKBOX_SELECTORS.forEach(selector => {
+        // 遍历所有目标选择器
+        TARGET_SELECTORS.forEach(selector => {
             const elements = document.querySelectorAll(selector);
             elements.forEach(element => {
-                if (element.offsetParent !== null) { // 确保元素可见
+                if (isElementVisible(element) && !found) {
                     try {
-                        // 尝试直接点击
-                        element.click();
-                        console.log(`Clicked verification element: ${selector}`);
-                        clicked = true;
+                        // 优先点击label（如果复选框被label包裹）
+                        const label = element.tagName === 'INPUT' ? element.nextElementSibling : element;
+                        (label || element).click();
+                        console.log('[Auto-Verify] Clicked verification element:', element);
+                        found = true;
                     } catch (e) {
-                        // 如果直接点击失败，尝试模拟鼠标事件
-                        const event = new MouseEvent('click', {
-                            bubbles: true,
-                            cancelable: true,
-                            view: window
-                        });
-                        element.dispatchEvent(event);
-                        console.log(`Simulated click on verification element: ${selector}`);
-                        clicked = true;
+                        console.log('[Auto-Verify] Click failed:', e.message);
                     }
                 }
             });
         });
 
-        if (!clicked) {
-            // 如果未找到可点击元素，继续定时检查
-            setTimeout(tryClickVerification, CHECK_INTERVAL);
-        } else {
-            console.log('Verification checkbox clicked successfully');
+        // 未找到则继续重试
+        if (!found) {
+            setTimeout(attemptVerification, CHECK_DELAY);
         }
     }
 
-    // 页面加载完成后开始检查
+    // 页面加载完成后启动
     window.addEventListener('load', () => {
-        console.log('Auto verification script started');
-        tryClickVerification();
+        console.log('[Auto-Verify] Script started (simple checkbox mode)');
+        attemptVerification();
     });
 
-    // 监听页面动态变化（如AJAX加载的验证码）
+    // 监听动态内容加载（如AJAX生成的验证框）
     const observer = new MutationObserver(() => {
-        if (attemptCount < MAX_ATTEMPTS) {
-            tryClickVerification();
-        }
+        if (retryCount < MAX_RETRIES) attemptVerification();
     });
-
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
+    observer.observe(document.body, { childList: true, subtree: true });
 
 })();

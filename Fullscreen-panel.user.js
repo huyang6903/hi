@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         TV Video Fullscreen Button
+// @name         TV Video Fullscreen Button (Enhanced)
 // @namespace    http://tampermonkey.net/
-// @version      1.0
-// @description  Persistent floating button for video fullscreen (TV remote-friendly)
+// @version      1.1
+// @description  Fixed video detection + configurable button position for TV remotes
 // @author       Your Name
 // @match        *://*/*
 // @grant        none
@@ -12,63 +12,76 @@
 (function() {
     'use strict';
 
-    // 配置（针对电视遥控器优化）
+    // ==== 可自定义配置项 ====
     const CONFIG = {
-        // 悬浮按钮样式（大尺寸、高对比度，适合遥控器操作）
+        // 悬浮按钮位置（根据电视遥控器习惯调整）
+        buttonPosition: {
+            top: 'auto',      // 'auto' 或具体像素值（如 '50px'）
+            bottom: '150px',  // 建议设为较大值（如 '150px'）方便底部导航
+            left: 'auto',
+            right: '20px'
+        },
+        // 按钮尺寸（增大更易聚焦）
+        buttonSize: 80, // 按钮宽度/高度（像素）
+        // 视频检测增强
+        videoDetection: {
+            includeIframe: true,       // 检测iframe中的视频（如YouTube嵌入）
+            includeHiddenVideos: false, // 是否检测隐藏的视频（默认关闭）
+            minVideoWidth: 300,        // 最小视频宽度（过滤小广告）
+            retryInterval: 1000        // 视频检测重试间隔（毫秒）
+        },
+        // 其他样式配置
         buttonStyle: `
-            position: fixed;
-            bottom: 40px;
-            right: 20px;
-            width: 70px;
-            height: 70px;
-            border-radius: 50%;
             background: #FF5722;
             color: white;
             border: 4px solid rgba(255,255,255,0.8);
-            font-size: 24px;
-            font-weight: bold;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            font-size: 28px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.4);
-            cursor: pointer;
-            z-index: 99999;
-            opacity: 0.8;
-            transition: all 0.2s ease;
-            outline: none;
+            opacity: 0.9;
         `,
-        // 按钮聚焦样式（遥控器选中时高亮）
         focusStyle: `
-            transform: scale(1.1);
+            transform: scale(1.2);
             opacity: 1;
-            box-shadow: 0 0 0 4px #4CAF50, 0 0 20px rgba(76, 175, 80, 0.8);
+            box-shadow: 0 0 0 5px #4CAF50, 0 0 25px rgba(76, 175, 80, 0.8);
         `,
-        // 视频选择器（覆盖常见视频元素）
-        videoSelectors: [
-            'video',
-            'iframe[src*="youtube.com"], iframe[src*="vimeo.com"], iframe[src*="dailymotion.com"]',
-            'div[class*="video-player"] video',
-            'div[role="region"][aria-label*="video"] video'
-        ],
-        // 按钮显示/隐藏规则
-        autoHide: true,          // 无操作时自动隐藏
-        hideDelay: 3000,         // 无操作后隐藏延迟（毫秒）
-        showOnVideo: true,       // 检测到视频时显示
-        minVideoDuration: 10     // 最小视频时长（秒，避免广告）
+        autoHide: true,
+        hideDelay: 3000
     };
+    // ========================
 
     let fullscreenButton;
     let hideTimeout;
     let lastActivityTime = Date.now();
+    let videoCheckInterval;
 
-    // 创建悬浮按钮（支持遥控器焦点）
+    // 创建悬浮按钮（位置可配置）
     function createFloatingButton() {
         fullscreenButton = document.createElement('button');
-        fullscreenButton.innerHTML = '⛶'; // 全屏图标（电视遥控器易识别）
-        fullscreenButton.style.cssText = CONFIG.buttonStyle;
-        fullscreenButton.tabIndex = 0; // 允许遥控器聚焦
+        fullscreenButton.innerHTML = '⛶';
+        fullscreenButton.tabIndex = 0; // 确保遥控器可聚焦
 
-        // 点击事件：触发全屏
+        // 应用位置和尺寸配置
+        const positionStyle = Object.entries(CONFIG.buttonPosition)
+            .map(([key, value]) => `${key}: ${value};`)
+            .join(' ');
+
+        fullscreenButton.style.cssText = `
+            position: fixed;
+            ${positionStyle}
+            width: ${CONFIG.buttonSize}px;
+            height: ${CONFIG.buttonSize}px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 99999;
+            outline: none;
+            ${CONFIG.buttonStyle}
+            transition: all 0.2s ease;
+        `;
+
+        // 点击事件
         fullscreenButton.addEventListener('click', () => {
             enterFullscreen(getActiveVideo());
             resetHideTimeout();
@@ -80,47 +93,132 @@
             resetHideTimeout();
         });
         fullscreenButton.addEventListener('blur', () => {
-            fullscreenButton.style.cssText = CONFIG.buttonStyle;
+            fullscreenButton.style.cssText = `
+                position: fixed;
+                ${positionStyle}
+                width: ${CONFIG.buttonSize}px;
+                height: ${CONFIG.buttonSize}px;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                cursor: pointer;
+                z-index: 99999;
+                outline: none;
+                ${CONFIG.buttonStyle}
+                transition: all 0.2s ease;
+            `;
             resetHideTimeout();
-        });
-
-        // 监听页面活动（移动、点击等），保持按钮显示
-        ['mousemove', 'click', 'keydown', 'touchstart'].forEach(event => {
-            document.addEventListener(event, () => {
-                lastActivityTime = Date.now();
-                resetHideTimeout();
-                if (CONFIG.autoHide && !isButtonVisible()) {
-                    showButton();
-                }
-            });
         });
 
         document.body.appendChild(fullscreenButton);
         setupAutoHide();
     }
 
-    // 显示按钮
+    // ==== 修复视频检测逻辑 ====
+    function getActiveVideo() {
+        const videos = [];
+
+        // 1. 检测原生 video 标签
+        document.querySelectorAll('video').forEach(video => {
+            if (isValidVideo(video)) {
+                videos.push({
+                    element: video,
+                    priority: 2, // 原生视频优先级高
+                    area: (video.offsetWidth || 0) * (video.offsetHeight || 0)
+                });
+            }
+        });
+
+        // 2. 检测 iframe 中的视频（如 YouTube）
+        if (CONFIG.videoDetection.includeIframe) {
+            document.querySelectorAll('iframe').forEach(iframe => {
+                // 常见视频平台的 iframe
+                const videoIframePatterns = [
+                    'youtube.com/embed/',
+                    'vimeo.com/video/',
+                    'dailymotion.com/embed/',
+                    'netflix.com/watch',
+                    'primevideo.com/detail'
+                ];
+                const isVideoIframe = videoIframePatterns.some(pattern => 
+                    iframe.src.includes(pattern)
+                );
+
+                if (isVideoIframe && isValidIframe(iframe)) {
+                    videos.push({
+                        element: iframe,
+                        priority: 1, // iframe 视频优先级次之
+                        area: (iframe.offsetWidth || 0) * (iframe.offsetHeight || 0)
+                    });
+                }
+            });
+        }
+
+        // 3. 按优先级和尺寸排序，返回最佳视频
+        if (videos.length > 0) {
+            return videos.sort((a, b) => {
+                if (b.priority !== a.priority) return b.priority - a.priority;
+                return b.area - a.area; // 同优先级按面积排序
+            })[0].element;
+        }
+
+        return null;
+    }
+
+    // 验证视频是否有效
+    function isValidVideo(video) {
+        // 可见性检查
+        if (!CONFIG.videoDetection.includeHiddenVideos && 
+            (video.offsetParent === null || video.style.display === 'none')) {
+            return false;
+        }
+        // 尺寸检查
+        if (video.offsetWidth < CONFIG.videoDetection.minVideoWidth) {
+            return false;
+        }
+        // 排除静音广告（可选）
+        // if (video.muted && video.duration < 30) return false;
+        return true;
+    }
+
+    // 验证 iframe 是否有效
+    function isValidIframe(iframe) {
+        return iframe.offsetParent !== null && 
+               iframe.offsetWidth >= CONFIG.videoDetection.minVideoWidth &&
+               !iframe.src.includes('ads.') && // 排除广告 iframe
+               !iframe.src.includes('doubleclick.net');
+    }
+
+    // 持续检测视频（修复延迟加载问题）
+    function startVideoDetection() {
+        videoCheckInterval = setInterval(() => {
+            const hasVideo = getActiveVideo() !== null;
+            if (hasVideo) {
+                showButton();
+            } else if (CONFIG.autoHide) {
+                hideButton();
+            }
+        }, CONFIG.videoDetection.retryInterval);
+    }
+
+    // ==== 其他辅助函数 ====
     function showButton() {
         if (fullscreenButton) {
             fullscreenButton.style.display = 'flex';
-            fullscreenButton.style.opacity = '0.8';
+            fullscreenButton.style.opacity = CONFIG.buttonStyle.includes('opacity') 
+                ? CONFIG.buttonStyle.match(/opacity: ([^;]+)/)[1] 
+                : '0.9';
         }
     }
 
-    // 隐藏按钮（仅保留微小占位，方便遥控器重新聚焦）
     function hideButton() {
         if (fullscreenButton && CONFIG.autoHide) {
-            fullscreenButton.style.opacity = '0.2';
-            fullscreenButton.style.transform = 'scale(0.8)';
+            fullscreenButton.style.opacity = '0.3';
+            fullscreenButton.style.transform = 'scale(0.9)';
         }
     }
 
-    // 检查按钮是否可见
-    function isButtonVisible() {
-        return fullscreenButton && fullscreenButton.style.opacity !== '0.2';
-    }
-
-    // 重置自动隐藏定时器
     function resetHideTimeout() {
         if (hideTimeout) clearTimeout(hideTimeout);
         hideTimeout = setTimeout(() => {
@@ -130,51 +228,32 @@
         }, CONFIG.hideDelay);
     }
 
-    // 设置自动隐藏逻辑
     function setupAutoHide() {
         if (CONFIG.autoHide) {
             resetHideTimeout();
+            ['mousemove', 'click', 'keydown', 'touchstart'].forEach(event => {
+                document.addEventListener(event, () => {
+                    lastActivityTime = Date.now();
+                    showButton();
+                    resetHideTimeout();
+                });
+            });
         } else {
             showButton();
         }
     }
 
-    // 获取当前活跃视频
-    function getActiveVideo() {
-        const videos = [];
-        CONFIG.videoSelectors.forEach(selector => {
-            document.querySelectorAll(selector).forEach(el => {
-                // 过滤可见且时长达标视频
-                if (el.offsetParent !== null && 
-                    (el.duration === undefined || el.duration > CONFIG.minVideoDuration)) {
-                    videos.push(el);
-                }
-            });
-        });
-
-        // 优先返回播放中的视频，否则返回最大尺寸视频
-        return videos.find(v => v.tagName === 'VIDEO' && !v.paused) || 
-               videos.sort((a, b) => {
-                   const aArea = (a.offsetWidth || 0) * (a.offsetHeight || 0);
-                   const bArea = (b.offsetWidth || 0) * (b.offsetHeight || 0);
-                   return bArea - aArea; // 按面积降序排序
-               })[0] || null;
-    }
-
-    // 进入全屏（处理电视浏览器兼容性）
     function enterFullscreen(element) {
         if (!element) {
             showToast('No video found');
             return;
         }
 
-        // 处理iframe视频（如YouTube）
-        const target = element.tagName === 'IFRAME' ? element : element.closest('div[class*="player"], div[class*="video"]') || element;
-
         try {
+            const target = element.tagName === 'IFRAME' ? element : element;
             if (target.requestFullscreen) {
                 target.requestFullscreen();
-            } else if (target.webkitRequestFullscreen) { // 安卓WebView
+            } else if (target.webkitRequestFullscreen) {
                 target.webkitRequestFullscreen();
             } else if (target.msRequestFullscreen) {
                 target.msRequestFullscreen();
@@ -187,7 +266,6 @@
         }
     }
 
-    // 电视友好的提示消息（大字体）
     function showToast(message) {
         const toast = document.createElement('div');
         toast.textContent = message;
@@ -198,43 +276,22 @@
             transform: translate(-50%, -50%);
             background: rgba(0,0,0,0.8);
             color: white;
-            padding: 15px 30px;
-            border-radius: 8px;
-            font-size: 24px;
+            padding: 20px 40px;
+            border-radius: 10px;
+            font-size: 32px;
             z-index: 999999;
         `;
         document.body.appendChild(toast);
         setTimeout(() => toast.remove(), 2000);
     }
 
-    // 监听视频加载（动态显示按钮）
-    function watchVideoPresence() {
-        const checkForVideos = () => {
-            const hasValidVideo = getActiveVideo() !== null;
-            if (hasValidVideo && CONFIG.showOnVideo) {
-                showButton();
-            } else if (CONFIG.showOnVideo) {
-                hideButton();
-            }
-        };
-
-        // 初始检查
-        checkForVideos();
-        // 定时检查（处理动态加载视频）
-        setInterval(checkForVideos, 2000);
-        // DOM变化监听
-        const observer = new MutationObserver(checkForVideos);
-        observer.observe(document.body, { childList: true, subtree: true });
-    }
-
     // 初始化
     function init() {
         createFloatingButton();
-        watchVideoPresence();
-        console.log('TV Video Fullscreen Button loaded. Use remote to focus and click.');
+        startVideoDetection();
+        console.log('Enhanced TV Video Button loaded. Position:', CONFIG.buttonPosition);
     }
 
-    // 启动脚本
     init();
 
 })();

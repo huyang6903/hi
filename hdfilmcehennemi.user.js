@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         YouTube TV Immersive Mode
+// @name         YouTube Pro TV Edition
 // @namespace    https://github.com/
 // @version      1.0.0
-// @description  YouTube 安卓电视沉浸模式：强制隐藏侧边推荐/评论/Shorts/商品区，放大播放器区域，自动滚动到视频，适合TV浏览器
+// @description  YouTube 安卓电视浏览器增强：最佳清晰度、记忆倍速/音量/进度、TV遥控器快捷键、隐藏Shorts/评论/部分推荐、播放器聚焦
 // @author       You
 // @match        *://www.youtube.com/*
 // @match        *://m.youtube.com/*
@@ -14,28 +14,111 @@
     'use strict';
 
     const CONFIG = {
-        debug: true,
+        debug: false,
 
-        hideSidebar: true,
-        hideComments: true,
+        autoBestQuality: true,
+        preferredQualities: ['hd2160', 'hd1440', 'hd1080', 'hd720', 'large', 'medium'],
+
+        defaultPlaybackRate: 1.25,
+        rememberPlaybackRate: true,
+
+        rememberVolume: true,
+        defaultVolume: 1.0,
+
+        rememberProgress: true,
+        resumeOnlyIfMoreThan: 15, // 超过 15 秒才记录
+        resumePrompt: false,      // TV 端默认直接续播，不弹提示
+        resumeNearEndIgnore: 30,  // 距离结束 30 秒内不恢复
+
+        autoTheaterLike: true,
+        autoFullscreen: false,    // 电视端如需自动全屏改 true
+
         hideShorts: true,
+        hideComments: true,
+        hideSidebar: false,
         hideMerch: true,
-        hideChat: true,
         hideEndscreen: true,
-        hideHeader: false,
-        hideMiniGuide: true,
-        autoScrollToPlayer: true,
-        forcePlayerMaximize: true,
-        pseudoFullscreen: true,
-        keepCleaning: true
+        hideMiniPlayers: true,
+        hideChat: true,
+
+        focusPlayerOnLoad: true,
+        keepPlayerFocused: true,
+
+        seekSeconds: 10,
+        longSeekSeconds: 30,
+
+        // TV 遥控器快捷键
+        hotkeys: {
+            playPause: ['Enter', 'MediaPlayPause', ' '],
+            seekForward: ['ArrowRight'],
+            seekBackward: ['ArrowLeft'],
+            volumeUp: ['ArrowUp'],
+            volumeDown: ['ArrowDown'],
+            speedUp: ['=','+'],
+            speedDown: ['-','_'],
+            toggleFullscreen: ['f','F'],
+            nextVideo: ['n','N'],
+            prevVideo: ['p','P'],
+            focusPlayer: ['0']
+        }
     };
 
+    const STORAGE = {
+        rate: 'yt_pro_tv_rate',
+        volume: 'yt_pro_tv_volume',
+        muted: 'yt_pro_tv_muted',
+        progressPrefix: 'yt_pro_tv_progress_'
+    };
+
+    let lastUrl = location.href;
+    let observerStarted = false;
+    let progressTimer = null;
+    let lastVideoId = null;
+
     function log(...args) {
-        if (CONFIG.debug) console.log('[YT-TV-Immersive]', ...args);
+        if (CONFIG.debug) console.log('[YT-Pro-TV]', ...args);
+    }
+
+    function ready(fn) {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', fn, { once: true });
+        } else {
+            fn();
+        }
+    }
+
+    function isMobileSite() {
+        return location.hostname === 'm.youtube.com';
     }
 
     function isWatchPage() {
         return location.pathname === '/watch';
+    }
+
+    function getVideoId() {
+        try {
+            return new URL(location.href).searchParams.get('v');
+        } catch {
+            return null;
+        }
+    }
+
+    function getVideo() {
+        return document.querySelector('video');
+    }
+
+    function getPlayer() {
+        return document.getElementById('movie_player');
+    }
+
+    function click(el) {
+        if (!el) return false;
+        try {
+            el.click();
+            return true;
+        } catch {
+            return false;
+        }
     }
 
     function addStyle(css) {
@@ -46,12 +129,6 @@
 
     function injectCSS() {
         let css = `
-            /* 基础页面拉伸 */
-            html, body, ytd-app {
-                background: #000 !important;
-                overflow-x: hidden !important;
-            }
-
             /* 隐藏 Shorts */
             ytd-guide-entry-renderer a[title="Shorts"],
             ytd-mini-guide-entry-renderer a[title="Shorts"],
@@ -63,160 +140,62 @@
                 display: none !important;
             }
 
-            /* 隐藏评论 */
+            /* 评论区 */
             ytd-comments,
             #comments,
             ytm-item-section-renderer[section-identifier="comments-entry-point"] {
                 display: none !important;
             }
 
-            /* 隐藏商品/推广 */
+            /* 商品/周边/推广区 */
             ytd-merch-shelf-renderer,
             ytd-product-carousel,
             ytd-offer-module-renderer {
                 display: none !important;
             }
 
-            /* 隐藏聊天 */
-            ytd-live-chat-frame,
-            #chat {
-                display: none !important;
-            }
-
-            /* 隐藏片尾结束卡 */
+            /* 结束卡片 */
             .ytp-ce-element,
             .ytp-endscreen-content,
             .html5-endscreen {
                 display: none !important;
             }
 
-            /* 隐藏 mini guide / 左侧缩略导航 */
-            #guide,
-            #mini-guide {
+            /* 聊天 */
+            ytd-live-chat-frame,
+            #chat {
                 display: none !important;
             }
 
-            /* 隐藏广告/推广位 */
-            ytd-display-ad-renderer,
-            ytd-ad-slot-renderer,
-            ytd-in-feed-ad-layout-renderer,
-            ytd-promoted-sparkles-web-renderer,
-            ytd-promoted-video-renderer,
-            ytd-compact-promoted-video-renderer,
-            ytd-action-companion-ad-renderer,
-            ytd-player-legacy-desktop-watch-ads-renderer,
-            .ytp-ad-module,
-            .video-ads,
-            .ytp-ad-overlay-container {
+            /* 迷你播放器 */
+            ytd-miniplayer,
+            .ytd-miniplayer {
                 display: none !important;
             }
         `;
 
-        if (CONFIG.hideSidebar) {
+        if (CONFIG.hideSidebar && !isMobileSite()) {
             css += `
-                /* 隐藏右侧推荐 */
-                #secondary,
-                #secondary-inner,
-                ytd-watch-next-secondary-results-renderer,
-                ytd-item-section-renderer,
-                #related {
+                #secondary, ytd-watch-next-secondary-results-renderer {
                     display: none !important;
-                    width: 0 !important;
-                    max-width: 0 !important;
-                    min-width: 0 !important;
-                    margin: 0 !important;
-                    padding: 0 !important;
                 }
-
-                /* 主区域扩展 */
-                #primary,
-                #primary-inner,
-                #columns,
-                ytd-watch-flexy {
+                #primary {
                     width: 100% !important;
                     max-width: 100% !important;
                 }
+            `;
+        }
 
-                #columns {
+        if (CONFIG.autoTheaterLike && !isMobileSite()) {
+            css += `
+                ytd-watch-flexy:not([fullscreen]) #primary.ytd-watch-flexy {
+                    width: 100% !important;
+                }
+                ytd-watch-flexy:not([fullscreen]) #columns.ytd-watch-flexy {
                     display: block !important;
                 }
-            `;
-        }
-
-        if (CONFIG.hideHeader) {
-            css += `
-                ytd-masthead,
-                #masthead-container,
-                tp-yt-app-header-layout {
-                    display: none !important;
-                }
-            `;
-        }
-
-        if (CONFIG.forcePlayerMaximize) {
-            css += `
-                /* 放大播放器区域 */
-                #player,
-                #player-container,
-                #player-container-outer,
-                #full-bleed-container,
-                #ytd-player,
-                .html5-video-player,
-                .ytp-chrome-bottom,
-                video {
-                    max-width: 100% !important;
-                }
-
-                ytd-watch-flexy[flexy] #primary.ytd-watch-flexy {
-                    width: 100% !important;
-                    max-width: 100% !important;
-                    min-width: 100% !important;
-                    flex: 1 1 100% !important;
-                }
-
-                #player-theater-container,
-                #full-bleed-container,
-                #player-container-outer,
-                #player,
-                ytd-player,
-                .html5-video-player {
-                    width: 100vw !important;
-                    max-width: 100vw !important;
-                }
-
-                video {
-                    width: 100% !important;
-                    height: auto !important;
-                    background: #000 !important;
-                }
-            `;
-        }
-
-        if (CONFIG.pseudoFullscreen) {
-            css += `
-                /* 伪全屏沉浸：只保留视频相关区域 */
-                ytd-watch-metadata,
-                #below,
-                #meta,
-                #title,
-                #description,
-                #info,
-                #info-contents,
-                #owner,
-                #top-row,
-                #bottom-row,
-                #actions,
-                #menu,
-                #playlist,
-                #expand,
-                #description-inline-expander,
-                ytd-watch-next-secondary-results-renderer,
-                ytd-rich-grid-renderer {
-                    display: none !important;
-                }
-
-                body {
-                    background: #000 !important;
+                ytd-watch-flexy:not([fullscreen]) #secondary.ytd-watch-flexy {
+                    margin-top: 16px !important;
                 }
             `;
         }
@@ -224,30 +203,200 @@
         addStyle(css);
     }
 
-    function getPlayerTarget() {
-        return document.querySelector('#player, #full-bleed-container, ytd-player, .html5-video-player, video');
+    function getSavedRate() {
+        const n = parseFloat(localStorage.getItem(STORAGE.rate));
+        if (!isNaN(n) && n > 0.1 && n <= 16) return n;
+        return CONFIG.defaultPlaybackRate;
     }
 
-    function getVideo() {
-        return document.querySelector('video');
+    function saveRate(rate) {
+        if (!CONFIG.rememberPlaybackRate) return;
+        if (!rate || isNaN(rate)) return;
+        localStorage.setItem(STORAGE.rate, String(rate));
+    }
+
+    function getSavedVolume() {
+        const n = parseFloat(localStorage.getItem(STORAGE.volume));
+        if (!isNaN(n) && n >= 0 && n <= 1) return n;
+        return CONFIG.defaultVolume;
+    }
+
+    function saveVolume(video) {
+        if (!CONFIG.rememberVolume || !video) return;
+        localStorage.setItem(STORAGE.volume, String(video.volume));
+        localStorage.setItem(STORAGE.muted, video.muted ? '1' : '0');
+    }
+
+    function applyRate(video) {
+        if (!video) return;
+        const rate = getSavedRate();
+        if (video.playbackRate !== rate) {
+            video.playbackRate = rate;
+            log('rate applied:', rate);
+        }
+        if (!video.dataset.ytProRateBound) {
+            video.dataset.ytProRateBound = '1';
+            video.addEventListener('ratechange', () => saveRate(video.playbackRate), { passive: true });
+        }
+    }
+
+    function applyVolume(video) {
+        if (!video || !CONFIG.rememberVolume) return;
+        const volume = getSavedVolume();
+        const muted = localStorage.getItem(STORAGE.muted) === '1';
+        video.volume = volume;
+        video.muted = muted;
+        log('volume applied:', volume, 'muted:', muted);
+
+        if (!video.dataset.ytProVolumeBound) {
+            video.dataset.ytProVolumeBound = '1';
+            video.addEventListener('volumechange', () => saveVolume(video), { passive: true });
+        }
+    }
+
+    function getProgressKey(videoId) {
+        return STORAGE.progressPrefix + videoId;
+    }
+
+    function saveProgress(video) {
+        if (!CONFIG.rememberProgress || !video) return;
+        const videoId = getVideoId();
+        if (!videoId) return;
+
+        const current = Math.floor(video.currentTime || 0);
+        const duration = Math.floor(video.duration || 0);
+        if (!duration || current < CONFIG.resumeOnlyIfMoreThan) return;
+
+        const payload = JSON.stringify({
+            t: current,
+            d: duration,
+            ts: Date.now()
+        });
+        localStorage.setItem(getProgressKey(videoId), payload);
+    }
+
+    function restoreProgress(video) {
+        if (!CONFIG.rememberProgress || !video) return;
+        const videoId = getVideoId();
+        if (!videoId) return;
+
+        const raw = localStorage.getItem(getProgressKey(videoId));
+        if (!raw) return;
+
+        try {
+            const data = JSON.parse(raw);
+            if (!data || !data.t || !data.d) return;
+
+            const nearEnd = data.d - data.t <= CONFIG.resumeNearEndIgnore;
+            if (nearEnd) return;
+
+            const apply = () => {
+                if (!video.duration || isNaN(video.duration)) return;
+                if (data.t < video.duration - CONFIG.resumeNearEndIgnore) {
+                    video.currentTime = data.t;
+                    log('progress restored:', data.t);
+                }
+            };
+
+            if (CONFIG.resumePrompt) {
+                const ok = confirm(`继续从 ${formatTime(data.t)} 播放？`);
+                if (ok) apply();
+            } else {
+                setTimeout(apply, 1200);
+            }
+        } catch (e) {
+            log('restoreProgress error', e);
+        }
+    }
+
+    function clearProgressNearEnd(video) {
+        const videoId = getVideoId();
+        if (!videoId || !video || !video.duration) return;
+        if (video.duration - video.currentTime <= CONFIG.resumeNearEndIgnore) {
+            localStorage.removeItem(getProgressKey(videoId));
+        }
+    }
+
+    function formatTime(sec) {
+        sec = Math.max(0, Math.floor(sec || 0));
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = sec % 60;
+        return h > 0
+            ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+            : `${m}:${String(s).padStart(2,'0')}`;
+    }
+
+    function setBestQuality() {
+        if (!CONFIG.autoBestQuality) return;
+        const player = getPlayer();
+        if (!player) return;
+
+        try {
+            if (typeof player.getAvailableQualityLevels !== 'function') return;
+            const levels = player.getAvailableQualityLevels();
+            if (!Array.isArray(levels) || !levels.length) return;
+
+            const target = CONFIG.preferredQualities.find(q => levels.includes(q));
+            if (!target) return;
+
+            if (typeof player.setPlaybackQualityRange === 'function') {
+                player.setPlaybackQualityRange(target, target);
+            }
+            if (typeof player.setPlaybackQuality === 'function') {
+                player.setPlaybackQuality(target);
+            }
+
+            log('quality set:', target);
+        } catch (e) {
+            log('setBestQuality error', e);
+        }
+    }
+
+    function setTheaterLike() {
+        if (!CONFIG.autoTheaterLike) return;
+        if (!isWatchPage()) return;
+        if (isMobileSite()) return;
+
+        const flexy = document.querySelector('ytd-watch-flexy');
+        const theater = document.querySelector('ytd-watch-flexy[theater]');
+        if (theater) return;
+
+        const btn = document.querySelector('.ytp-size-button');
+        if (btn) {
+            click(btn);
+            log('theater mode clicked');
+        } else if (flexy) {
+            flexy.setAttribute('theater', '');
+        }
+    }
+
+    function requestFullscreenSafe() {
+        if (!CONFIG.autoFullscreen) return;
+        const player = getPlayer() || document.documentElement;
+        if (!document.fullscreenElement && player?.requestFullscreen) {
+            player.requestFullscreen().catch(() => {});
+        }
     }
 
     function focusPlayer() {
-        const v = getVideo();
-        const p = getPlayerTarget();
+        const video = getVideo();
+        const player = getPlayer();
 
-        if (v) {
+        if (video) {
             try {
-                v.setAttribute('tabindex', '0');
-                v.focus({ preventScroll: true });
+                video.setAttribute('tabindex', '0');
+                video.focus({ preventScroll: true });
+                log('video focused');
                 return true;
             } catch {}
         }
 
-        if (p) {
+        if (player) {
             try {
-                p.setAttribute('tabindex', '0');
-                p.focus({ preventScroll: true });
+                player.setAttribute('tabindex', '0');
+                player.focus({ preventScroll: true });
+                log('player focused');
                 return true;
             } catch {}
         }
@@ -255,206 +404,255 @@
         return false;
     }
 
-    function scrollToPlayer() {
-        if (!CONFIG.autoScrollToPlayer) return;
-        const p = getPlayerTarget();
-        if (!p) return;
-        try {
-            p.scrollIntoView({ behavior: 'smooth', block: 'start', inline: 'nearest' });
-            log('scrollToPlayer');
-        } catch {}
-    }
-
-    function forceLayout() {
-        if (!isWatchPage()) return;
-
-        const app = document.querySelector('ytd-app');
-        const watch = document.querySelector('ytd-watch-flexy');
-        const columns = document.querySelector('#columns');
-        const primary = document.querySelector('#primary');
-        const secondary = document.querySelector('#secondary');
-        const below = document.querySelector('#below');
-
-        if (app) {
-            app.style.setProperty('background', '#000', 'important');
-        }
-
-        if (watch) {
-            watch.style.setProperty('width', '100%', 'important');
-            watch.style.setProperty('max-width', '100%', 'important');
-            watch.style.setProperty('background', '#000', 'important');
-        }
-
-        if (columns) {
-            columns.style.setProperty('display', 'block', 'important');
-            columns.style.setProperty('width', '100%', 'important');
-            columns.style.setProperty('max-width', '100%', 'important');
-        }
-
-        if (primary) {
-            primary.style.setProperty('width', '100%', 'important');
-            primary.style.setProperty('max-width', '100%', 'important');
-            primary.style.setProperty('margin', '0', 'important');
-            primary.style.setProperty('padding', '0', 'important');
-        }
-
-        if (secondary && CONFIG.hideSidebar) {
-            secondary.style.setProperty('display', 'none', 'important');
-        }
-
-        if (below && CONFIG.pseudoFullscreen) {
-            below.style.setProperty('display', 'none', 'important');
-        }
-
-        const player = getPlayerTarget();
-        if (player && CONFIG.forcePlayerMaximize) {
-            player.style.setProperty('width', '100vw', 'important');
-            player.style.setProperty('max-width', '100vw', 'important');
-            player.style.setProperty('margin', '0 auto', 'important');
-            player.style.setProperty('background', '#000', 'important');
-        }
-
+    function keepFocused() {
+        if (!CONFIG.keepPlayerFocused || !isWatchPage()) return;
+        const active = document.activeElement;
         const video = getVideo();
-        if (video) {
-            video.style.setProperty('width', '100%', 'important');
-            video.style.setProperty('height', 'auto', 'important');
-            video.style.setProperty('max-height', '100vh', 'important');
-            video.style.setProperty('background', '#000', 'important');
+        const player = getPlayer();
+
+        if (video && active !== video && active !== player && !player?.contains(active)) {
+            focusPlayer();
         }
     }
 
-    function cleanShortsCards() {
-        if (!CONFIG.hideShorts) return;
-
-        document.querySelectorAll('a[href^="/shorts/"]').forEach(el => {
-            const item = el.closest(
-                'ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-rich-shelf-renderer'
-            );
-            if (item) item.style.setProperty('display', 'none', 'important');
-        });
+    function togglePlayPause() {
+        const video = getVideo();
+        if (!video) return;
+        if (video.paused) video.play().catch(() => {});
+        else video.pause();
     }
 
-    function cleanExtraBlocks() {
-        const selectors = [];
+    function seekBy(sec) {
+        const video = getVideo();
+        if (!video || isNaN(video.currentTime)) return;
+        video.currentTime = Math.max(0, Math.min((video.duration || Infinity), video.currentTime + sec));
+    }
+
+    function changeVolume(delta) {
+        const video = getVideo();
+        if (!video) return;
+        video.muted = false;
+        const v = Math.max(0, Math.min(1, (video.volume || 0) + delta));
+        video.volume = v;
+    }
+
+    function changeSpeed(delta) {
+        const video = getVideo();
+        if (!video) return;
+        const next = Math.max(0.25, Math.min(4, Math.round((video.playbackRate + delta) * 100) / 100));
+        video.playbackRate = next;
+        saveRate(next);
+    }
+
+    function nextVideo() {
+        const btn =
+            document.querySelector('.ytp-next-button') ||
+            document.querySelector('a[aria-label*="Next"]') ||
+            document.querySelector('a[aria-label*="下一个"]');
+        if (btn) click(btn);
+    }
+
+    function prevVideo() {
+        history.back();
+    }
+
+    function bindHotkeys() {
+        if (document.documentElement.dataset.ytProHotkeysBound) return;
+        document.documentElement.dataset.ytProHotkeysBound = '1';
+
+        document.addEventListener('keydown', function (e) {
+            if (!isWatchPage()) return;
+
+            const tag = (document.activeElement?.tagName || '').toLowerCase();
+            const editing = ['input', 'textarea'].includes(tag) || document.activeElement?.isContentEditable;
+            if (editing) return;
+
+            const key = e.key;
+
+            const inMap = (arr) => arr.includes(key);
+
+            if (inMap(CONFIG.hotkeys.playPause)) {
+                e.preventDefault();
+                togglePlayPause();
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.seekForward)) {
+                e.preventDefault();
+                seekBy(CONFIG.seekSeconds);
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.seekBackward)) {
+                e.preventDefault();
+                seekBy(-CONFIG.seekSeconds);
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.volumeUp)) {
+                e.preventDefault();
+                changeVolume(0.05);
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.volumeDown)) {
+                e.preventDefault();
+                changeVolume(-0.05);
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.speedUp)) {
+                e.preventDefault();
+                changeSpeed(0.25);
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.speedDown)) {
+                e.preventDefault();
+                changeSpeed(-0.25);
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.toggleFullscreen)) {
+                e.preventDefault();
+                if (!document.fullscreenElement) {
+                    requestFullscreenSafe();
+                } else {
+                    document.exitFullscreen?.().catch(() => {});
+                }
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.nextVideo)) {
+                e.preventDefault();
+                nextVideo();
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.prevVideo)) {
+                e.preventDefault();
+                prevVideo();
+                return;
+            }
+            if (inMap(CONFIG.hotkeys.focusPlayer)) {
+                e.preventDefault();
+                focusPlayer();
+            }
+        }, true);
+    }
+
+    function bindVideo(video) {
+        if (!video || video.dataset.ytProBound) return;
+        video.dataset.ytProBound = '1';
+
+        applyRate(video);
+        applyVolume(video);
+
+        video.addEventListener('loadedmetadata', () => {
+            applyRate(video);
+            applyVolume(video);
+            setBestQuality();
+            restoreProgress(video);
+        }, { passive: true });
+
+        video.addEventListener('ended', () => {
+            clearProgressNearEnd(video);
+        }, { passive: true });
+
+        video.addEventListener('timeupdate', () => {
+            clearProgressNearEnd(video);
+        }, { passive: true });
+
+        log('video bound');
+    }
+
+    function startProgressSaver() {
+        if (progressTimer) clearInterval(progressTimer);
+        progressTimer = setInterval(() => {
+            const video = getVideo();
+            if (video && !video.paused) saveProgress(video);
+        }, 3000);
+    }
+
+    function handleWatchPage() {
+        const video = getVideo();
+        if (video) bindVideo(video);
+
+        setTimeout(setTheaterLike, 600);
+        setTimeout(setBestQuality, 1200);
+        setTimeout(setBestQuality, 2500);
+        setTimeout(requestFullscreenSafe, 1800);
+
+        if (CONFIG.focusPlayerOnLoad) {
+            setTimeout(focusPlayer, 800);
+            setTimeout(focusPlayer, 1800);
+        }
+    }
+
+    function cleanPage() {
+        if (CONFIG.hideShorts) {
+            document.querySelectorAll('a[href^="/shorts/"]').forEach(el => {
+                const item = el.closest('ytd-rich-item-renderer, ytd-grid-video-renderer, ytd-video-renderer, ytd-compact-video-renderer');
+                if (item) item.style.setProperty('display', 'none', 'important');
+            });
+        }
 
         if (CONFIG.hideComments) {
-            selectors.push('ytd-comments', '#comments');
-        }
-        if (CONFIG.hideMerch) {
-            selectors.push('ytd-merch-shelf-renderer', 'ytd-product-carousel', 'ytd-offer-module-renderer');
-        }
-        if (CONFIG.hideChat) {
-            selectors.push('ytd-live-chat-frame', '#chat');
-        }
-        if (CONFIG.hideEndscreen) {
-            selectors.push('.ytp-ce-element', '.ytp-endscreen-content', '.html5-endscreen');
-        }
-        if (CONFIG.hideMiniGuide) {
-            selectors.push('#guide', '#mini-guide');
+            document.querySelectorAll('ytd-comments, #comments').forEach(el => {
+                el.style.setProperty('display', 'none', 'important');
+            });
         }
 
-        if (selectors.length) {
-            document.querySelectorAll(selectors.join(',')).forEach(el => {
+        if (CONFIG.hideMerch) {
+            document.querySelectorAll('ytd-merch-shelf-renderer, ytd-product-carousel, ytd-offer-module-renderer').forEach(el => {
+                el.style.setProperty('display', 'none', 'important');
+            });
+        }
+
+        if (CONFIG.hideChat) {
+            document.querySelectorAll('ytd-live-chat-frame, #chat').forEach(el => {
+                el.style.setProperty('display', 'none', 'important');
+            });
+        }
+
+        if (CONFIG.hideMiniPlayers) {
+            document.querySelectorAll('ytd-miniplayer, .ytd-miniplayer').forEach(el => {
+                el.style.setProperty('display', 'none', 'important');
+            });
+        }
+
+        if (CONFIG.hideEndscreen) {
+            document.querySelectorAll('.ytp-ce-element, .ytp-endscreen-content, .html5-endscreen').forEach(el => {
                 el.style.setProperty('display', 'none', 'important');
             });
         }
     }
 
-    function tryFullscreenByGesture() {
-        // 浏览器限制：通常必须用户手势触发
-        // 所以这里只做“按 Enter 时尽量触发”
-        document.addEventListener('keydown', function (e) {
-            if (!isWatchPage()) return;
-            if (e.key !== 'Enter') return;
+    function onPageChanged() {
+        log('page changed:', location.href);
+        cleanPage();
 
-            const player = document.querySelector('#movie_player, .html5-video-player, video');
-            if (!player) return;
-
-            if (!document.fullscreenElement && player.requestFullscreen) {
-                player.requestFullscreen().catch(() => {});
+        if (isWatchPage()) {
+            const currentId = getVideoId();
+            if (currentId !== lastVideoId) {
+                lastVideoId = currentId;
             }
-        }, true);
-    }
-
-    function bindKeys() {
-        document.addEventListener('keydown', function (e) {
-            if (!isWatchPage()) return;
-
-            const video = getVideo();
-            if (!video) return;
-
-            switch (e.key) {
-                case 'ArrowLeft':
-                    e.preventDefault();
-                    video.currentTime = Math.max(0, video.currentTime - 10);
-                    break;
-                case 'ArrowRight':
-                    e.preventDefault();
-                    video.currentTime = Math.min(video.duration || Infinity, video.currentTime + 10);
-                    break;
-                case ' ':
-                case 'MediaPlayPause':
-                    e.preventDefault();
-                    if (video.paused) video.play().catch(() => {});
-                    else video.pause();
-                    break;
-                case 'ArrowUp':
-                    e.preventDefault();
-                    video.volume = Math.min(1, (video.volume || 0) + 0.05);
-                    break;
-                case 'ArrowDown':
-                    e.preventDefault();
-                    video.volume = Math.max(0, (video.volume || 0) - 0.05);
-                    break;
-                case '0':
-                    e.preventDefault();
-                    focusPlayer();
-                    scrollToPlayer();
-                    break;
-            }
-        }, true);
-    }
-
-    function cleanAll() {
-        cleanShortsCards();
-        cleanExtraBlocks();
-        forceLayout();
-    }
-
-    function onPageReady() {
-        if (!isWatchPage()) return;
-
-        setTimeout(() => {
-            cleanAll();
-            scrollToPlayer();
-            focusPlayer();
-        }, 500);
-
-        setTimeout(() => {
-            cleanAll();
-            scrollToPlayer();
-            focusPlayer();
-        }, 1500);
-
-        setTimeout(() => {
-            cleanAll();
-        }, 3000);
+            handleWatchPage();
+        }
     }
 
     function watchUrlChange() {
-        let lastUrl = location.href;
         setInterval(() => {
             if (location.href !== lastUrl) {
                 lastUrl = location.href;
-                log('URL changed:', lastUrl);
-                onPageReady();
+                onPageChanged();
             }
         }, 500);
     }
 
     function observeDom() {
+        if (observerStarted) return;
+        observerStarted = true;
+
         const mo = new MutationObserver(() => {
-            cleanAll();
+            cleanPage();
+
+            if (isWatchPage()) {
+                const video = getVideo();
+                if (video) bindVideo(video);
+                if (CONFIG.keepPlayerFocused) keepFocused();
+            }
         });
 
         mo.observe(document.documentElement || document, {
@@ -465,24 +663,23 @@
 
     function init() {
         injectCSS();
-        bindKeys();
-        tryFullscreenByGesture();
+        bindHotkeys();
 
-        const start = () => {
-            onPageReady();
+        ready(() => {
+            cleanPage();
+            onPageChanged();
             watchUrlChange();
             observeDom();
+            startProgressSaver();
 
-            if (CONFIG.keepCleaning) {
-                setInterval(cleanAll, 2000);
-            }
-        };
-
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', start, { once: true });
-        } else {
-            start();
-        }
+            setInterval(() => {
+                cleanPage();
+                if (isWatchPage()) {
+                    setBestQuality();
+                    if (CONFIG.keepPlayerFocused) keepFocused();
+                }
+            }, 2500);
+        });
     }
 
     init();
